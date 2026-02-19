@@ -311,3 +311,11 @@ def fail_job(job_id: str, body: JobFail):
             (err, now, job_id),
         )
     return {"ok": True, "status": "failed"}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    host = os.environ.get("BROKER_HOST", "127.0.0.1")
+    port = int(os.environ.get("BROKER_PORT", "8000"))
+    uvicorn.run(app, host=host, port=port)
