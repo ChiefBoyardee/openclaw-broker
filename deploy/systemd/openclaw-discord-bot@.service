@@ -1,0 +1,29 @@
+# OpenClaw Discord Bot — systemd template for multi-instance.
+# Instance name from %i (e.g. openclaw-discord-bot@clawhub).
+# Do NOT put secrets here. Use EnvironmentFile at /opt/openclaw-bot-%i/bot.env.
+
+[Unit]
+Description=OpenClaw Discord Bot (%i)
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+Environment=INSTANCE_NAME=%i
+EnvironmentFile=/opt/openclaw-bot-%i/bot.env
+WorkingDirectory=/opt/openclaw-bot-%i
+ExecStart=/opt/openclaw-bot-%i/venv/bin/python discord_bot/bot.py
+Restart=always
+RestartSec=2
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/openclaw-bot-%i /var/lib/openclaw-bot-%i
+
+[Install]
+WantedBy=multi-user.target

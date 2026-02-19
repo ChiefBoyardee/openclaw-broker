@@ -25,8 +25,8 @@ A small, secure job queue: **broker** (FastAPI + SQLite), **runner** (worker tha
 | Component    | Role |
 |-------------|------|
 | **Broker**  | FastAPI app: `GET /health`, `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/next`, `POST /jobs/{id}/result`, `POST /jobs/{id}/fail`. Auth via `X-Bot-Token` and `X-Worker-Token`. Jobs support `failed` status, leases, and worker identity; stale running jobs are requeued. |
-| **Runner**  | Worker process: polls `GET /jobs/next` (sends `X-Worker-Id`), runs jobs (`ping`, `capabilities`, `plan_echo`, `approve_echo`), posts results or failures. For WSL or a dedicated worker machine. |
-| **Discord bot** | Listens in DMs (or one channel); allowlisted user can send `ping`, `capabilities`, `plan <text>`, `approve <plan_id>`, `status <id>`. Guardrails: cooldown and max concurrent jobs per user. |
+| **Runner**  | Worker process: polls `GET /jobs/next` (sends `X-Worker-Id`), runs jobs (`ping`, `capabilities`, `plan_echo`, `approve_echo`, `repo_list`, `repo_status`, `repo_last_commit`, `repo_grep`, `repo_readfile`), posts results or failures. For WSL or a dedicated worker machine. See [docs/RUNNER_REPO_CONFIG.md](docs/RUNNER_REPO_CONFIG.md) for repo allowlist and env. |
+| **Discord bot** | Listens in DMs (or one channel); allowlisted user can send `ping`, `capabilities`, `plan <text>`, `approve <plan_id>`, `status <id>`, `repos`, `repostat <repo>`, `last <repo>`, `grep <repo> <query> [path]`, `cat <repo> <path> [start] [end]`, `whoami`. Guardrails: cooldown and max concurrent jobs per user. |
 
 ---
 
@@ -95,7 +95,7 @@ Use the same `BOT_TOKEN` in the broker and in the Discord bot env. Use the same 
 
 - **`WORKER_ID`** (optional, default: hostname): Sent as `X-Worker-Id` on all broker requests; broker stores it on the job when claimed.
 - **`RUNNER_STATE_DIR`** (optional, default `/var/lib/openclaw-runner/state`): Plan files for `plan_echo` / `approve_echo` are stored under `RUNNER_STATE_DIR/plans/`.
-- **Commands:** `ping`, `capabilities`, `plan_echo`, `approve_echo`. See [docs/RUNNER_REPO_CONFIG.md](docs/RUNNER_REPO_CONFIG.md) for future repo-command defaults (Sprint 3+).
+- **Commands:** `ping`, `capabilities`, `plan_echo`, `approve_echo`, `repo_list`, `repo_status`, `repo_last_commit`, `repo_grep`, `repo_readfile`. Repo commands require an allowlist and env; see [docs/RUNNER_REPO_CONFIG.md](docs/RUNNER_REPO_CONFIG.md) for `repos.json` format and `RUNNER_REPOS_BASE`, `RUNNER_REPO_ALLOWLIST`, timeouts, and output caps.
 
 ### Discord bot
 
@@ -174,7 +174,7 @@ Clients (bot, runner, future UIs) can rely on this contract:
 
 ## Production deployment
 
-- **VPS (broker + Discord bot):** Clone to e.g. `/opt/openclaw/openclaw-broker`. Run `deploy/scripts/install_broker.sh` and `deploy/scripts/install_discord_bot.sh`. Create env files from the `.env.example` templates; set `BROKER_HOST` to your Tailscale IP for tailnet-only binding. Create `/var/lib/openclaw-broker` for the SQLite DB. Start with `sudo systemctl start openclaw-broker openclaw-discord-bot`.
+- **VPS (broker + Discord bot):** Clone to e.g. `/opt/openclaw/openclaw-broker`. Run `deploy/scripts/install_broker.sh`. For the Discord bot, the preferred approach is **multi-instance**: use the systemd template and install one instance per name (e.g. `clawhub`, `staging`) with `./deploy/install_bot_instance.sh <instance_name> [--enable]`. Each instance gets isolated dirs under `/opt/openclaw-bot-<instance>/` and `/var/lib/openclaw-bot-<instance>/`; env file is `/opt/openclaw-bot-<instance>/bot.env` (create from `bot.env.example`, never commit). Each instance needs its own Discord Application and `DISCORD_TOKEN` (and typically its own `BOT_TOKEN` and allowlist). Example: `./deploy/install_bot_instance.sh clawhub --enable` then `journalctl -u openclaw-discord-bot@clawhub -f`. See [docs/DISCORD_BOT_DEPLOY.md](docs/DISCORD_BOT_DEPLOY.md) for details. Single-instance legacy: `deploy/scripts/install_discord_bot.sh`. Create broker env and `/var/lib/openclaw-broker`; set `BROKER_HOST` to your Tailscale IP for tailnet-only binding. To configure and start the broker non-interactively on the VPS, run `./deploy/scripts/configure_and_start_broker.sh` (optionally `export BROKER_HOST=100.x.x.x` first).
 - **WSL runner:** Run `deploy/scripts/install_runner.sh`, create `runner.env` from `runner/runner.env.example` with `BROKER_URL` and `WORKER_TOKEN`, then run `runner/start.sh` or `python runner/runner.py`.
 
 See [SECURITY.md](SECURITY.md) for token handling and tailnet-only binding.
@@ -196,7 +196,8 @@ openclaw-broker/
 │   ├── bot.py
 │   └── bot.env.example
 ├── deploy/
-│   ├── systemd/         # Service templates
+│   ├── systemd/         # openclaw-discord-bot@.service (multi-instance), openclaw-broker.service.template
+│   ├── install_bot_instance.sh   # Install one bot instance (multi-instance deploy)
 │   └── scripts/         # install_broker.sh, install_discord_bot.sh, install_runner.sh
 ├── docs/
 ├── tests/
@@ -211,6 +212,7 @@ openclaw-broker/
 ## Documentation
 
 - [SECURITY.md](SECURITY.md) — Token handling, tailnet-only binding, file permissions.
+- [docs/DISCORD_BOT_DEPLOY.md](docs/DISCORD_BOT_DEPLOY.md) — Multi-instance Discord bot deployment (systemd template, env locations, whoami).
 - [docs/PUSHING_TO_GITHUB.md](docs/PUSHING_TO_GITHUB.md) — Sanitization checklist and push steps.
 - [docs/RUNNER_REPO_CONFIG.md](docs/RUNNER_REPO_CONFIG.md) — Defaults for future repo commands (search tool, repo paths, allowlist).
 

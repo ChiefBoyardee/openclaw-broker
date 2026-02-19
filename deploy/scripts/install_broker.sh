@@ -29,7 +29,7 @@ echo "[install_broker] systemd unit copied to /etc/systemd/system/${SERVICE_NAME
 
 echo ""
 echo "Next steps:"
-echo "  1. Create broker env: sudo mkdir -p /opt/openclaw-broker && sudo cp $REPO_ROOT/broker/broker.env.example /opt/openclaw-broker/broker.env && sudo $EDITOR /opt/openclaw-broker/broker.env"
+echo "  1. Create broker env: sudo mkdir -p /opt/openclaw-broker && sudo cp $REPO_ROOT/broker/broker.env.example /opt/openclaw-broker/broker.env && sudo ${EDITOR:-nano} /opt/openclaw-broker/broker.env"
 echo "  2. Set WORKER_TOKEN and BOT_TOKEN (e.g. openssl rand -hex 32), BROKER_DB, BROKER_HOST (e.g. tailscale0 IP), BROKER_PORT"
 echo "  3. Create data dir: sudo mkdir -p /var/lib/openclaw-broker && sudo chown $INSTALL_USER:$INSTALL_USER /var/lib/openclaw-broker"
 echo "  4. Optional: sudo systemctl enable $SERVICE_NAME && sudo systemctl start $SERVICE_NAME"
