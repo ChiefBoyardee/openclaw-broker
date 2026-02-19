@@ -18,24 +18,19 @@ Confirm no `broker.env`, `bot.env`, `runner.env`, or `*.db` are staged. If you e
 
 ## Create the GitHub repo and push
 
+**Already done locally:** Git is initialized, initial commit is on `main`, and tag `v0.1.0` is created.
+
 1. **Create a new repository on GitHub** (github.com → New repository). Name it e.g. `openclaw-broker`. Do **not** add a README, .gitignore, or license (we already have them).
 
-2. **In this project directory** (with git already initialized and initial commit done):
+2. **Add the remote and push** (replace `YOUR_USERNAME` with your GitHub username):
 
    ```bash
    git remote add origin https://github.com/YOUR_USERNAME/openclaw-broker.git
-   git branch -M main
    git push -u origin main
+   git push origin v0.1.0
    ```
 
    Use SSH if you prefer: `git@github.com:YOUR_USERNAME/openclaw-broker.git`.
-
-3. **Tag the first release** (optional but recommended for versioning):
-
-   ```bash
-   git tag -a v0.1.0 -m "Sprint 1+2: protocol hardening, worker identity, approve scaffold, bot guardrails"
-   git push origin v0.1.0
-   ```
 
 ## Versioning going forward
 
