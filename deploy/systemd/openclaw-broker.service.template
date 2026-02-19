@@ -1,0 +1,23 @@
+# OpenClaw Broker — systemd unit template.
+# Copy to /etc/systemd/system/openclaw-broker.service (install script does this).
+# Do NOT put secrets here. Use EnvironmentFile pointing to broker.env.
+# Production: set BROKER_HOST to tailscale0 IP (e.g. 100.x.x.x) for tailnet-only binding.
+
+[Unit]
+Description=OpenClaw Broker (FastAPI job queue)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+EnvironmentFile=/opt/openclaw-broker/broker.env
+WorkingDirectory=/opt/openclaw/openclaw-broker
+# Host/port come from EnvironmentFile (e.g. BROKER_HOST=100.x.x.x for tailscale0)
+ExecStart=/opt/openclaw/openclaw-broker/.venv-broker/bin/python broker/app.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,21 @@
+# OpenClaw Discord Bot — systemd unit template.
+# Copy to /etc/systemd/system/openclaw-discord-bot.service (install script does this).
+# Do NOT put secrets here. Use EnvironmentFile pointing to bot.env.
+
+[Unit]
+Description=OpenClaw Discord Bot
+After=network-online.target openclaw-broker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+EnvironmentFile=/opt/openclaw-discord-bot/bot.env
+WorkingDirectory=/opt/openclaw/openclaw-broker
+ExecStart=/opt/openclaw/openclaw-broker/.venv-bot/bin/python discord_bot/bot.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
