@@ -2,6 +2,7 @@
 OpenClaw Runner — worker that long-polls broker /jobs/next and posts /jobs/{id}/result or /jobs/{id}/fail.
 Runs on worker machine (e.g. WSL). Reads config from env (runner.env).
 """
+from __future__ import annotations
 
 import json
 import os
@@ -15,7 +16,7 @@ import uuid
 import requests
 
 # --- Config from env ---
-BROKER_URL = os.environ.get("BROKER_URL", "http://127.0.0.1:8000").rstrip("/")
+BROKER_URL = os.environ.get("BROKER_URL", "http://127.0.0.1:8000").strip().rstrip("/")
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")
 WORKER_ID = os.environ.get("WORKER_ID", "") or socket.gethostname()
 RUNNER_STATE_DIR = os.environ.get("RUNNER_STATE_DIR", "/var/lib/openclaw-runner/state")
@@ -420,3 +421,7 @@ def run_job(command: str, payload: str) -> str:
         return _repo_readfile(repo, path, start, end)
 
     return f"unknown command: {command}"
+
+
+if __name__ == "__main__":
+    main()
