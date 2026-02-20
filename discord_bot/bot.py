@@ -1,12 +1,13 @@
 """
 OpenClaw Discord Bot — creates jobs from DMs and replies with results.
-Only responds to DMs (or optional single channel). Allowlists one Discord user ID.
+Only responds to DMs (or optional single channel). Allowlist: one or more Discord user IDs.
 Commands: ping, capabilities, plan, approve, status, repos, repostat, last, grep, cat, whoami.
 Guardrails: cooldown, max concurrent.
 """
 
 import json
 import os
+import re
 import sys
 import time
 from typing import Optional
@@ -16,10 +17,11 @@ import requests
 
 # --- Config from env ---
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "")
-BROKER_URL = os.environ.get("BROKER_URL", "http://127.0.0.1:8000").rstrip("/")
+BROKER_URL = os.environ.get("BROKER_URL", "http://127.0.0.1:8000").strip().rstrip("/")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")  # X-Bot-Token for broker API
-ALLOWED_USER_ID = os.environ.get("ALLOWED_USER_ID", "")  # single user ID allowed to use bot
-ALLOWED_CHANNEL_ID = os.environ.get("ALLOWED_CHANNEL_ID", "")  # optional: single channel (empty = DMs only)
+ALLOWED_USER_ID = os.environ.get("ALLOWED_USER_ID", "").strip()  # single user ID (backward compat)
+ALLOWLIST_USER_ID = os.environ.get("ALLOWLIST_USER_ID", "").strip()  # optional: comma/space separated IDs
+ALLOWED_CHANNEL_ID = os.environ.get("ALLOWED_CHANNEL_ID", "").strip()  # optional: single channel (empty = DMs only)
 JOB_POLL_INTERVAL_SEC = float(os.environ.get("JOB_POLL_INTERVAL_SEC", "2"))
 JOB_POLL_TIMEOUT_SEC = float(os.environ.get("JOB_POLL_TIMEOUT_SEC", "120"))
 BOT_COOLDOWN_SECONDS = float(os.environ.get("BOT_COOLDOWN_SECONDS", "3"))
@@ -27,6 +29,40 @@ BOT_MAX_CONCURRENT = int(os.environ.get("BOT_MAX_CONCURRENT", "1"))
 INSTANCE_NAME = os.environ.get("INSTANCE_NAME", "default")
 
 MAX_DISPLAY_LEN = 1500
+
+# Broker HTTP timeouts: (connect, read) in seconds — avoid hanging if broker is down
+BROKER_CONNECT_TIMEOUT = 5
+BROKER_READ_TIMEOUT = 15
+
+# Allowlist: union of ALLOWED_USER_ID (single) and ALLOWLIST_USER_ID (comma/space separated)
+def _parse_allowlist_ids() -> set[str]:
+    ids: set[str] = set()
+    if ALLOWED_USER_ID:
+        ids.add(ALLOWED_USER_ID)
+    for part in re.split(r"[\s,]+", ALLOWLIST_USER_ID):
+        if part:
+            ids.add(part)
+    return ids
+
+
+ALLOWLIST_IDS = _parse_allowlist_ids()
+
+
+def redact(text: str) -> str:
+    """Replace any occurrence of configured tokens with *** so they are never logged."""
+    out = text
+    if BOT_TOKEN:
+        out = out.replace(BOT_TOKEN, "***")
+    if DISCORD_TOKEN:
+        out = out.replace(DISCORD_TOKEN, "***")
+    return out
+
+
+def _allowlist_display() -> str:
+    """Summary string for whoami (allowlist status)."""
+    if not ALLOWLIST_IDS:
+        return "not set"
+    return ", ".join(sorted(ALLOWLIST_IDS))
 
 
 def format_whoami(instance_name: str, bot_user_id: str, broker_url: str, allowed_user_id: str) -> str:
@@ -41,7 +77,7 @@ def format_whoami(instance_name: str, bot_user_id: str, broker_url: str, allowed
 
 
 def is_allowed(channel: discord.abc.Messageable, author_id: str) -> bool:
-    if not ALLOWED_USER_ID or str(author_id) != str(ALLOWED_USER_ID):
+    if str(author_id) not in ALLOWLIST_IDS:
         return False
     if not ALLOWED_CHANNEL_ID:
         return isinstance(channel, discord.DMChannel)
@@ -64,7 +100,7 @@ def create_job(command: str, payload: str) -> dict:
         f"{BROKER_URL}/jobs",
         headers={"X-Bot-Token": BOT_TOKEN},
         json={"command": command, "payload": payload},
-        timeout=30,
+        timeout=(BROKER_CONNECT_TIMEOUT, BROKER_READ_TIMEOUT),
     )
     r.raise_for_status()
     return r.json()
@@ -74,7 +110,7 @@ def get_job(job_id: str) -> dict:
     r = requests.get(
         f"{BROKER_URL}/jobs/{job_id}",
         headers={"X-Bot-Token": BOT_TOKEN},
-        timeout=30,
+        timeout=(BROKER_CONNECT_TIMEOUT, BROKER_READ_TIMEOUT),
     )
     r.raise_for_status()
     return r.json()
@@ -84,8 +120,11 @@ def wait_for_job_result(job_id: str) -> tuple[str, bool]:
     """
     Poll until job is done or failed or timeout.
     Returns (message, timed_out). If timed_out, message is the "still running" text.
+    Uses gentle backoff: 0.5s → 1s → 2s (capped) between polls to avoid spamming the broker.
     """
     deadline = time.monotonic() + JOB_POLL_TIMEOUT_SEC
+    poll_backoff_cap = min(2.0, max(0.5, JOB_POLL_INTERVAL_SEC))
+    sleep_sec = 0.5
     while time.monotonic() < deadline:
         job = get_job(job_id)
         status = job.get("status", "")
@@ -94,7 +133,8 @@ def wait_for_job_result(job_id: str) -> tuple[str, bool]:
         if status == "failed":
             err = job.get("error") or job.get("result") or "unknown"
             return (f"Job failed: {err}", False)
-        time.sleep(JOB_POLL_INTERVAL_SEC)
+        time.sleep(sleep_sec)
+        sleep_sec = min(sleep_sec * 2, poll_backoff_cap)
     return (f"Still running. Job ID: {job_id} (try: status {job_id})", True)
 
 
@@ -209,12 +249,12 @@ async def _run_job_and_reply(
                     display = f"Status: {status}\n{note}" if note else f"Status: {status}"
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
-        display = truncate_for_display(display, job_id)
+        display = truncate_for_display(redact(display), job_id)
         await message.reply(display)
     except requests.RequestException as e:
-        await message.reply(f"Broker error: {e}")
+        await message.reply(redact(f"Broker error: {e}"))
     except Exception as e:
-        await message.reply(f"Error: {e}")
+        await message.reply(redact(f"Error: {e}"))
     finally:
         if job_id:
             state["active_jobs"].discard(job_id)
@@ -223,6 +263,10 @@ async def _run_job_and_reply(
 @client.event
 async def on_message(message: discord.Message):
     if message.author.bot:
+        return
+    # Polite refusal in DMs when user is not allowlisted (no reply in channels to avoid spam)
+    if isinstance(message.channel, discord.DMChannel) and str(message.author.id) not in ALLOWLIST_IDS:
+        await message.reply("You are not authorized to use this bot.")
         return
     if not is_allowed(message.channel, message.author.id):
         return
@@ -264,7 +308,7 @@ async def on_message(message: discord.Message):
         try:
             job = get_job(job_id)
         except requests.RequestException as e:
-            await message.reply(f"Broker error: {e}")
+            await message.reply(redact(f"Broker error: {e}"))
             return
         status = job.get("status", "?")
         lines = [f"Job `{job_id}`: **{status}**"]
@@ -276,10 +320,10 @@ async def on_message(message: discord.Message):
                     result = _format_repo_envelope(parsed, job_id)
             except (json.JSONDecodeError, TypeError):
                 pass
-            lines.append(truncate_for_display(result, job_id))
+            lines.append(truncate_for_display(redact(result), job_id))
         elif status == "failed":
             err = job.get("error") or job.get("result") or "unknown"
-            lines.append(truncate_for_display(f"Error: {err}", job_id))
+            lines.append(truncate_for_display(redact(f"Error: {err}"), job_id))
         await message.reply("\n".join(lines))
         return
 
@@ -360,7 +404,7 @@ async def on_message(message: discord.Message):
     if cmd == "whoami":
         bot_id = str(client.user.id) if client.user else "?"
         await message.reply(
-            format_whoami(INSTANCE_NAME, bot_id, BROKER_URL, ALLOWED_USER_ID)
+            format_whoami(INSTANCE_NAME, bot_id, BROKER_URL, _allowlist_display())
         )
         return
 
@@ -372,8 +416,11 @@ async def on_message(message: discord.Message):
 
 
 def main():
-    if not DISCORD_TOKEN or not BOT_TOKEN or not ALLOWED_USER_ID:
-        print("[bot] ERROR: DISCORD_TOKEN, BOT_TOKEN, and ALLOWED_USER_ID must be set", file=sys.stderr)
+    if not DISCORD_TOKEN or not BOT_TOKEN:
+        print("[bot] ERROR: DISCORD_TOKEN and BOT_TOKEN must be set", file=sys.stderr)
+        sys.exit(1)
+    if not ALLOWLIST_IDS:
+        print("[bot] ERROR: At least one of ALLOWED_USER_ID or ALLOWLIST_USER_ID must be set", file=sys.stderr)
         sys.exit(1)
     client.run(DISCORD_TOKEN)
 

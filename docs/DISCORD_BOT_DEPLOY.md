@@ -2,6 +2,24 @@
 
 The Discord bot can run as **multiple instances** on the same VPS, each with its own token, env file, venv, and state. This uses a systemd **template** unit and an install script.
 
+## Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DISCORD_TOKEN` | Yes | Bot token from Discord Developer Portal (each instance needs its own Discord Application). |
+| `BOT_TOKEN` | Yes | Same value as broker `X-Bot-Token` (or per-instance token if broker allows). |
+| `BROKER_URL` | Yes | Broker base URL (e.g. `http://127.0.0.1:8000` or Tailscale URL). |
+| `ALLOWED_USER_ID` | One of allowlist | Single Discord user ID allowed to use the bot (right-click user → Copy ID). |
+| `ALLOWLIST_USER_ID` | One of allowlist | Additional user IDs, comma- or space-separated (complements `ALLOWED_USER_ID`). At least one of `ALLOWED_USER_ID` or `ALLOWLIST_USER_ID` must be set. |
+| `ALLOWED_CHANNEL_ID` | No | Single channel ID to allow; leave empty for DMs only. |
+| `INSTANCE_NAME` | No | Set automatically by systemd to `%i` for template units; override in `bot.env` if needed. |
+| `JOB_POLL_INTERVAL_SEC` | No | Seconds between job status polls (default `2`). |
+| `JOB_POLL_TIMEOUT_SEC` | No | Max seconds to wait for job result before replying "Still running…" (default `120`). |
+| `BOT_COOLDOWN_SECONDS` | No | **Per-user** minimum seconds between commands (default `3`). |
+| `BOT_MAX_CONCURRENT` | No | **Per-user** max jobs in progress, queued or running (default `1`). |
+
+Broker HTTP calls use fixed connect/read timeouts so the bot does not hang if the broker is down. Job polling uses gentle backoff (0.5s → 1s → 2s) between status checks to avoid spamming the broker.
+
 ## Overview
 
 - **Template unit:** `openclaw-discord-bot@.service` — the `%i` is the instance name (e.g. `clawhub` → `openclaw-discord-bot@clawhub`).
@@ -11,7 +29,29 @@ The Discord bot can run as **multiple instances** on the same VPS, each with its
 - **Env file:** `/opt/openclaw-bot-<instance>/bot.env`. Do not commit; create from `bot.env.example` and set secrets.
 - **User:** Services run as `openclaw` (created by the install script if missing).
 
-## Install one instance
+## Streamlined onboarding (recommended)
+
+To add a new bot by pasting tokens and config (no manual env file editing):
+
+```bash
+./deploy/onboard_bot.sh <instance_name>
+```
+
+You’ll be prompted for: **DISCORD_TOKEN**, **BOT_TOKEN**, **BROKER_URL**, **ALLOWED_USER_ID** (or ALLOWLIST_USER_ID), and optional ALLOWED_CHANNEL_ID. The script runs the install, writes `bot.env`, and optionally enables/starts the unit. Add `--enable` to start without prompting:
+
+```bash
+./deploy/onboard_bot.sh urgoclaw --enable
+```
+
+Non-interactive: set env vars and run (use `ONBOARD_START=1` or `--enable` to start without prompt):
+
+```bash
+INSTANCE_NAME=urgoclaw DISCORD_TOKEN=... BOT_TOKEN=... BROKER_URL=... ALLOWED_USER_ID=... ./deploy/onboard_bot.sh --enable
+```
+
+Env examples for broker, runner, and bot in one place: [deploy/env.examples/](../deploy/env.examples/) (see README there for VPS + WSL layout).
+
+## Install one instance (manual)
 
 From the repo root:
 
@@ -71,7 +111,41 @@ Example for instance `clawhub`:
 journalctl -u openclaw-discord-bot@clawhub -f
 ```
 
-Startup logs include the bot’s Discord username, instance name, and broker URL so you can confirm which instance is running.
+Startup logs include the bot’s Discord username, instance name, and broker URL so you can confirm which instance is running. Tokens are never logged.
+
+## Run locally
+
+From the repo root:
+
+```bash
+cp discord_bot/bot.env.example discord_bot/bot.env
+# Edit discord_bot/bot.env: set DISCORD_TOKEN, BOT_TOKEN, BROKER_URL, and at least one of ALLOWED_USER_ID or ALLOWLIST_USER_ID
+# Optional: ALLOWED_CHANNEL_ID, JOB_POLL_*, BOT_COOLDOWN_SECONDS, BOT_MAX_CONCURRENT
+export $(grep -v '^#' discord_bot/bot.env | xargs)   # Linux/macOS; on Windows set vars manually or use a .env loader
+python discord_bot/bot.py
+```
+
+Ensure the broker (and optionally the runner) are running so job commands succeed.
+
+## Example DM commands
+
+Send these in a DM with the bot (as an allowlisted user):
+
+| Command | Description |
+|---------|-------------|
+| `whoami` | Instance name, bot user ID, broker URL, allowlist status. |
+| `ping hello` | Creates a job and replies with result (e.g. `pong: hello`). |
+| `capabilities` | Worker ID and capabilities list from the runner. |
+| `status <job_id>` | Job status and result (truncated if long; use for long output). |
+| `repos` | List of repos configured on the runner. |
+| `repostat <repo>` | Repo branch and dirty status. |
+| `last <repo>` | Last commit for the repo. |
+| `grep <repo> <query> [path]` | Search in repo (optional path prefix). |
+| `cat <repo> <path> [start] [end]` | Read file lines (default 1–200). |
+| `plan <text>` | Create plan; reply includes `plan_id` for use with `approve`. |
+| `approve <plan_id>` | Approve a plan by ID. |
+
+Unauthorized users (not in the allowlist) who DM the bot receive a single polite refusal message. Cooldown and max concurrent jobs apply **per user**.
 
 ## whoami command
 
