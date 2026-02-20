@@ -13,7 +13,8 @@ Schema (compatible with your existing DB):
     error TEXT,                          # set when status=failed (Sprint 1)
     started_at INTEGER,                  # set on claim (Sprint 1)
     lease_until INTEGER,                 # set on claim; used for requeue (Sprint 1)
-    worker_id TEXT                       # set on claim (Sprint 2)
+    worker_id TEXT,                      # set on claim (Sprint 2)
+    requires TEXT                        # optional; JSON e.g. {"caps":["llm:vllm"]} (Sprint 5)
   )
 
 Endpoints:
@@ -35,6 +36,7 @@ Notes:
 
 from __future__ import annotations
 
+import json
 import os
 import sqlite3
 import time
@@ -64,6 +66,7 @@ JOB_KEYS = (
     "result",
     "error",
     "worker_id",
+    "requires",
 )
 
 
@@ -127,6 +130,8 @@ def migrate_db() -> None:
             conn.execute("ALTER TABLE jobs ADD COLUMN lease_until INTEGER")
         if "worker_id" not in cur_cols:
             conn.execute("ALTER TABLE jobs ADD COLUMN worker_id TEXT")
+        if "requires" not in cur_cols:
+            conn.execute("ALTER TABLE jobs ADD COLUMN requires TEXT")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_jobs_status_lease ON jobs(status, lease_until)"
         )
@@ -159,11 +164,51 @@ def require_bot_token(
 
 
 # ----------------------------
+# Capability matching (Sprint 5)
+# ----------------------------
+def _parse_worker_caps(header_value: Optional[str]) -> set[str]:
+    """Parse X-Worker-Caps: JSON array or comma-separated list. Returns set of cap strings."""
+    if not header_value or not (header_value := header_value.strip()):
+        return set()
+    if header_value.startswith("["):
+        try:
+            arr = json.loads(header_value)
+            return set(str(c).strip() for c in arr if c)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return {c.strip() for c in header_value.split(",") if c.strip()}
+
+
+def _job_required_caps(requires: Optional[str]) -> Optional[set[str]]:
+    """Parse job requires JSON e.g. {"caps": ["llm:vllm"]}. Returns set of caps or None if invalid/null."""
+    if not requires or not (requires := requires.strip()):
+        return None
+    try:
+        obj = json.loads(requires)
+        caps = obj.get("caps")
+        if caps is None:
+            return None
+        # Filter out empty/falsy caps for consistency with _parse_worker_caps
+        return set(str(c).strip() for c in caps if c is not None and str(c).strip()) if caps else set()
+    except (json.JSONDecodeError, TypeError):
+        return None
+
+
+def _job_matches_worker(requires: Optional[str], worker_caps: set[str]) -> bool:
+    """True if job can be claimed by worker: requires is NULL/empty or job required caps ⊆ worker_caps."""
+    required = _job_required_caps(requires)
+    if required is None or len(required) == 0:
+        return True
+    return required <= worker_caps
+
+
+# ----------------------------
 # Models
 # ----------------------------
 class JobCreate(BaseModel):
     command: str
     payload: str
+    requires: Optional[str] = None
 
 
 class JobResult(BaseModel):
@@ -189,8 +234,8 @@ def create_job(job: JobCreate):
     now = int(time.time())
     with db_conn() as conn:
         conn.execute(
-            "INSERT INTO jobs(id, created_at, status, command, payload) VALUES(?,?,?,?,?)",
-            (jid, now, "queued", job.command, job.payload),
+            "INSERT INTO jobs(id, created_at, status, command, payload, requires) VALUES(?,?,?,?,?,?)",
+            (jid, now, "queued", job.command, job.payload, job.requires),
         )
     return {"id": jid, "status": "queued"}
 
@@ -198,16 +243,18 @@ def create_job(job: JobCreate):
 @app.get("/jobs/next", dependencies=[Depends(require_worker_token)])
 def next_job(
     x_worker_id: Optional[str] = Header(default=None, alias="X-Worker-Id"),
+    x_worker_caps: Optional[str] = Header(default=None, alias="X-Worker-Caps"),
 ):
     """
     Claim the next queued job. Inside one BEGIN IMMEDIATE transaction:
     1) Requeue stale running jobs (lease_until < now); clear worker_id
-    2) Select oldest queued job
+    2) Select oldest queued job that matches worker caps (requires IS NULL or required caps ⊆ worker caps)
     3) Claim it with started_at, lease_until, worker_id; clear result/error/finished_at
     """
     now = int(time.time())
     lease_until = now + LEASE_SECONDS
     worker_id = (x_worker_id or "").strip() or None
+    worker_caps = _parse_worker_caps(x_worker_caps)
     with db_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         # 1) Requeue stale running jobs; clear worker_id
@@ -218,15 +265,18 @@ def next_job(
                WHERE status='running' AND lease_until IS NOT NULL AND lease_until < ?""",
             (now,),
         )
-        # 2) Select oldest queued job
-        row = conn.execute(
-            "SELECT * FROM jobs WHERE status='queued' ORDER BY created_at ASC LIMIT 1"
-        ).fetchone()
-        if not row:
+        # 2) Select oldest queued jobs and pick first that matches worker caps
+        rows = conn.execute(
+            "SELECT id, requires FROM jobs WHERE status='queued' ORDER BY created_at ASC LIMIT 50"
+        ).fetchall()
+        job_id = None
+        for row in rows:
+            if _job_matches_worker(row["requires"], worker_caps):
+                job_id = row["id"]
+                break
+        if not job_id:
             conn.execute("COMMIT")
             return {"job": None}
-
-        job_id = row["id"]
         # 3) Claim: set running, started_at, lease_until, worker_id; clear result/error/finished_at
         cur = conn.execute(
             """UPDATE jobs

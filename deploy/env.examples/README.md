@@ -21,6 +21,8 @@ From the repo root on the VPS. If a script is not executable (e.g. after a Windo
 
 3. **Runner (WSL/worker)** — from repo root on WSL, run `./deploy/onboard_runner.sh` and paste `BROKER_URL` and `WORKER_TOKEN` from step 1 (or set them in env). This creates `runner/runner.env`. Then run `python runner/runner.py` or `runner/start.sh`.
 
+For **multi-worker LLM smoke** (WSL vLLM + Jetson Orin), caps, routing, and full steps: see [docs/MULTI_WORKER_LLM_SMOKE.md](../../docs/MULTI_WORKER_LLM_SMOKE.md). Use [runner-wsl.env.example](runner-wsl.env.example) and [runner-jetson.env.example](runner-jetson.env.example) for each worker.
+
 ## Layout
 
 | Component | Env file | Where it lives |

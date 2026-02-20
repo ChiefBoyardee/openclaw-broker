@@ -1,0 +1,33 @@
+# OpenClaw Broker — Optional CD: deploy to VPS on push to main.
+# Requires repository secrets: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY (private key for SSH).
+# Optional repository variable: DEPLOY_ENABLED = true (to run this job; avoids using secrets in conditionals).
+# On the VPS, the repo must be cloned and update_vps.sh must be runnable (sudo for systemctl).
+# To disable: remove this file, or do not set DEPLOY_ENABLED / delete the secrets.
+name: Deploy to VPS
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Only run when deploy is explicitly enabled via repo variable (secrets are used only in steps, not in if)
+    if: vars.DEPLOY_ENABLED == 'true'
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: DEPLOY_REPO_PATH
+          script: |
+            set -e
+            REPO_ROOT="${DEPLOY_REPO_PATH:-/opt/openclaw/openclaw-broker}"
+            cd "$REPO_ROOT"
+            git pull
+            bash deploy/scripts/update_vps.sh --no-pull
+        env:
+          DEPLOY_REPO_PATH: ${{ secrets.DEPLOY_REPO_PATH }}

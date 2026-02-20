@@ -58,6 +58,15 @@ def redact(text: str) -> str:
     return out
 
 
+def _strip_phrase_any_case(text: str, phrase: str) -> str:
+    """Remove the first occurrence of phrase from text (case-insensitive). Returns stripped result."""
+    tl = text.lower()
+    idx = tl.find(phrase.lower())
+    if idx < 0:
+        return text.strip()
+    return (text[:idx] + text[idx + len(phrase) :]).strip()
+
+
 def _allowlist_display() -> str:
     """Summary string for whoami (allowlist status)."""
     if not ALLOWLIST_IDS:
@@ -95,11 +104,14 @@ def _user_state(user_id: str) -> dict:
 _user_states: dict[str, dict] = {}
 
 
-def create_job(command: str, payload: str) -> dict:
+def create_job(command: str, payload: str, requires: str | None = None) -> dict:
+    body: dict = {"command": command, "payload": payload}
+    if requires is not None:
+        body["requires"] = requires
     r = requests.post(
         f"{BROKER_URL}/jobs",
         headers={"X-Bot-Token": BOT_TOKEN},
-        json={"command": command, "payload": payload},
+        json=body,
         timeout=(BROKER_CONNECT_TIMEOUT, BROKER_READ_TIMEOUT),
     )
     r.raise_for_status()
@@ -201,6 +213,7 @@ async def _run_job_and_reply(
     payload: str,
     reply_prefix: str = "Job created: ",
     parse_json: bool = False,
+    requires: str | None = None,
 ) -> None:
     """Create job, wait for result, reply. Enforces guardrails and updates active_jobs."""
     user_id = str(message.author.id)
@@ -219,7 +232,7 @@ async def _run_job_and_reply(
         return
 
     try:
-        job = create_job(command=command, payload=payload)
+        job = create_job(command=command, payload=payload, requires=requires)
         job_id = job.get("id")
         if not job_id:
             await message.reply("Failed to create job (no id).")
@@ -247,6 +260,12 @@ async def _run_job_and_reply(
                     status = parsed.get("status", "?")
                     note = parsed.get("note", "")
                     display = f"Status: {status}\n{note}" if note else f"Status: {status}"
+                elif command == "llm_task":
+                    display = parsed.get("final", result)
+                    if not display and parsed.get("safety"):
+                        display = "(no final answer)" + (
+                            " — max steps reached." if parsed.get("safety", {}).get("max_steps_reached") else ""
+                        )
         except (json.JSONDecodeError, KeyError, TypeError):
             pass
         display = truncate_for_display(redact(display), job_id)
@@ -401,6 +420,51 @@ async def on_message(message: discord.Message):
         )
         return
 
+    if cmd in ("ask", "urgo"):
+        if not payload:
+            await message.reply("Usage: `ask <prompt>` or `urgo <prompt>`")
+            return
+        prompt_text = payload.strip()
+        # Forced routing: vllm: / vllm / jetson: / jetson (strip prefix so LLM does not see it)
+        prompt_for_llm = prompt_text
+        requires = None
+        pl = prompt_text.lower()
+        if pl.startswith("vllm:") or pl.startswith("vllm ") or " preferred vllm" in pl:
+            if pl.startswith("vllm:"):
+                prompt_for_llm = prompt_text[5:].lstrip()
+            elif pl.startswith("vllm "):
+                prompt_for_llm = prompt_text[5:].lstrip()
+            else:
+                prompt_for_llm = _strip_phrase_any_case(prompt_text, " preferred vllm")
+            if not prompt_for_llm.strip():
+                await message.reply("Please provide a prompt (e.g. `ask vllm: your question here`).")
+                return
+            payload_obj = {"prompt": prompt_for_llm, "preferred": "llm:vllm"}
+            requires = '{"caps":["llm:vllm"]}'
+        elif pl.startswith("jetson:") or pl.startswith("jetson ") or " preferred jetson" in pl:
+            if pl.startswith("jetson:"):
+                prompt_for_llm = prompt_text[7:].lstrip()
+            elif pl.startswith("jetson "):
+                prompt_for_llm = prompt_text[7:].lstrip()
+            else:
+                prompt_for_llm = _strip_phrase_any_case(prompt_text, " preferred jetson")
+            if not prompt_for_llm.strip():
+                await message.reply("Please provide a prompt (e.g. `ask jetson: your question here`).")
+                return
+            payload_obj = {"prompt": prompt_for_llm, "preferred": "llm:jetson"}
+            requires = '{"caps":["llm:jetson"]}'
+        else:
+            payload_obj = {"prompt": prompt_for_llm}
+        await _run_job_and_reply(
+            message,
+            "llm_task",
+            json.dumps(payload_obj),
+            reply_prefix="LLM job: ",
+            parse_json=True,
+            requires=requires,
+        )
+        return
+
     if cmd == "whoami":
         bot_id = str(client.user.id) if client.user else "?"
         await message.reply(
@@ -411,7 +475,7 @@ async def on_message(message: discord.Message):
     await message.reply(
         "Unknown command. Use: `ping <text>`, `capabilities`, `plan <text>`, `approve <plan_id>`, "
         "`status <job_id>`, `repos`, `repostat <repo>`, `last <repo>`, `grep <repo> <query> [path]`, "
-        "`cat <repo> <path> [start] [end]`, `whoami`"
+        "`cat <repo> <path> [start] [end]`, `ask <prompt>`, `urgo <prompt>`, `whoami`"
     )
 
 

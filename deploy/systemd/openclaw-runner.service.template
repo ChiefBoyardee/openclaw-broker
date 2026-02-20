@@ -1,0 +1,18 @@
+# OpenClaw Runner — systemd unit (e.g. Jetson). Copy to /etc/systemd/system/openclaw-runner.service.
+# Do NOT put secrets here. Use EnvironmentFile pointing to runner.env.
+
+[Unit]
+Description=OpenClaw Runner (job worker, LLM tool loop)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/opt/openclaw-runner-jetson/runner.env
+WorkingDirectory=REPO_ROOT_PLACEHOLDER
+ExecStart=REPO_ROOT_PLACEHOLDER/.venv-runner/bin/python -m runner.runner
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

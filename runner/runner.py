@@ -15,6 +15,9 @@ import uuid
 
 import requests
 
+from runner.llm_config import get_llm_config
+from runner.llm_loop import run_llm_tool_loop
+
 # --- Config from env ---
 BROKER_URL = os.environ.get("BROKER_URL", "http://127.0.0.1:8000").strip().rstrip("/")
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")
@@ -33,6 +36,23 @@ RUNNER_MAX_LINES = int(os.environ.get("RUNNER_MAX_LINES", "400"))
 
 RESULT_RETRY_BACKOFF = [0.5, 1.0, 2.0]
 RESULT_RETRY_ATTEMPTS = 3
+
+# Worker capabilities for broker job routing (Sprint 5): e.g. WORKER_CAPS=llm:vllm,repo_tools or LLM_CAP=llm:vllm
+WORKER_CAPS_STR = (os.environ.get("WORKER_CAPS", "") or "").strip()
+LLM_CAP = (os.environ.get("LLM_CAP", "") or "").strip()
+
+
+def _worker_caps_list() -> list[str]:
+    """Return list of caps to send as X-Worker-Caps (JSON array). Includes repo_tools and optional LLM cap."""
+    if WORKER_CAPS_STR:
+        caps = [c.strip() for c in WORKER_CAPS_STR.split(",") if c.strip()]
+    else:
+        caps = []
+    if LLM_CAP and LLM_CAP not in caps:
+        caps.append(LLM_CAP)
+    if "repo_tools" not in caps:
+        caps.append("repo_tools")
+    return caps
 
 PLANS_DIR = os.path.join(RUNNER_STATE_DIR, "plans")
 REPOS_JSON_FALLBACK = os.path.join(RUNNER_STATE_DIR, "repos.json")
@@ -240,6 +260,38 @@ def _repo_readfile(repo_name: str, path: str, start: int, end: int) -> str:
     return _repo_envelope("repo_readfile", repo_name, data, truncated=truncated)
 
 
+def _plan_echo_impl(text: str) -> str:
+    """Echo plan scaffold; used by run_job(plan_echo) and by LLM tool bridge."""
+    plan_id = str(uuid.uuid4())
+    summary = f"Echo plan for: {text[:200]}" if text else "Echo plan (no payload)"
+    plan_obj = {
+        "type": "plan",
+        "plan_id": plan_id,
+        "summary": summary,
+        "proposed_actions": ["(no-op)"],
+        "requires_approval": True,
+    }
+    path = os.path.join(PLANS_DIR, f"{plan_id}.json")
+    with open(path, "w") as f:
+        json.dump(plan_obj, f, indent=2)
+    return json.dumps(plan_obj)
+
+
+def _approve_echo_impl(plan_id: str) -> str:
+    """Approve echo scaffold; used by run_job(approve_echo) and by LLM tool bridge."""
+    path = os.path.join(PLANS_DIR, f"{plan_id}.json")
+    if not os.path.isfile(path):
+        raise ValueError("unknown plan_id")
+    approval = {
+        "type": "approval",
+        "plan_id": plan_id,
+        "status": "approved",
+        "applied": False,
+        "note": "no-op (scaffold)",
+    }
+    return json.dumps(approval)
+
+
 def _post_with_retry(method: str, url: str, headers: dict, json_body: dict, timeout: int = 30) -> bool:
     """
     POST to broker; retry on 5xx or network errors. Return True if terminal success (200).
@@ -269,8 +321,11 @@ def main():
         print("[runner] ERROR: WORKER_TOKEN not set", file=sys.stderr)
         sys.exit(1)
     _ensure_plans_dir()
+    caps_list = _worker_caps_list()
     headers = {"X-Worker-Token": WORKER_TOKEN, "X-Worker-Id": WORKER_ID}
-    print(f"[runner] started; broker={BROKER_URL} worker_id={WORKER_ID} poll_interval={POLL_INTERVAL_SEC}s")
+    if caps_list:
+        headers["X-Worker-Caps"] = json.dumps(caps_list)
+    print(f"[runner] started; broker={BROKER_URL} worker_id={WORKER_ID} poll_interval={POLL_INTERVAL_SEC}s caps={caps_list}")
     while True:
         try:
             r = requests.get(f"{BROKER_URL}/jobs/next", headers=headers, timeout=30)
@@ -321,53 +376,38 @@ def run_job(command: str, payload: str) -> str:
         return f"pong: {payload}"
 
     if command == "capabilities":
+        caps = [
+            "ping",
+            "capabilities",
+            "plan_echo",
+            "approve_echo",
+            "repo_list",
+            "repo_status",
+            "repo_last_commit",
+            "repo_grep",
+            "repo_readfile",
+        ]
+        worker_caps = _worker_caps_list()
+        if "llm_task" not in caps:
+            caps.append("llm_task")
+        for c in worker_caps:
+            if c.startswith("llm:") and c not in caps:
+                caps.append(c)
         out = {
             "worker_id": WORKER_ID,
-            "capabilities": [
-                "ping",
-                "capabilities",
-                "plan_echo",
-                "approve_echo",
-                "repo_list",
-                "repo_status",
-                "repo_last_commit",
-                "repo_grep",
-                "repo_readfile",
-            ],
+            "capabilities": caps,
             "version": "mvp",
         }
         return json.dumps(out)
 
     if command == "plan_echo":
-        plan_id = str(uuid.uuid4())
-        summary = f"Echo plan for: {payload[:200]}" if payload else "Echo plan (no payload)"
-        plan_obj = {
-            "type": "plan",
-            "plan_id": plan_id,
-            "summary": summary,
-            "proposed_actions": ["(no-op)"],
-            "requires_approval": True,
-        }
-        path = os.path.join(PLANS_DIR, f"{plan_id}.json")
-        with open(path, "w") as f:
-            json.dump(plan_obj, f, indent=2)
-        return json.dumps(plan_obj)
+        return _plan_echo_impl(payload or "")
 
     if command == "approve_echo":
         plan_id = (payload or "").strip()
         if not plan_id:
             raise ValueError("plan_id required")
-        path = os.path.join(PLANS_DIR, f"{plan_id}.json")
-        if not os.path.isfile(path):
-            raise ValueError("unknown plan_id")
-        approval = {
-            "type": "approval",
-            "plan_id": plan_id,
-            "status": "approved",
-            "applied": False,
-            "note": "no-op (scaffold)",
-        }
-        return json.dumps(approval)
+        return _approve_echo_impl(plan_id)
 
     # Repo commands (read-only; return JSON envelope)
     if command == "repo_list":
@@ -419,6 +459,50 @@ def run_job(command: str, payload: str) -> str:
         if not path:
             raise ValueError("path required")
         return _repo_readfile(repo, path, start, end)
+
+    if command == "llm_task":
+        try:
+            payload_obj = json.loads(payload) if payload else {}
+        except json.JSONDecodeError:
+            raise ValueError("llm_task payload must be valid JSON")
+        prompt = (payload_obj.get("prompt") or "").strip()
+        if not prompt:
+            raise ValueError("llm_task payload must include prompt")
+        config = get_llm_config()
+        if not config.get("base_url") or not config.get("model"):
+            raise ValueError("LLM not configured (set LLM_BASE_URL and LLM_MODEL)")
+        tools_list = payload_obj.get("tools")
+        if not tools_list:
+            tools_list = list(config.get("allowed_tools", []))
+        allowed_set = config.get("allowed_tools") or set()
+        if not allowed_set.issuperset(tools_list):
+            raise ValueError("llm_task tools must be subset of LLM_ALLOWED_TOOLS")
+        repo_context = payload_obj.get("repo_context")
+        max_steps = payload_obj["max_steps"] if "max_steps" in payload_obj else config.get("max_steps", 6)
+        max_steps = int(max_steps)
+        if max_steps < 1:
+            max_steps = 1
+        # Bridge for tool_registry.dispatch: methods + allowed_tools, worker_id
+        class _Bridge:
+            allowed_tools = allowed_set
+            worker_id = WORKER_ID
+            def repo_list(_self):
+                return _repo_list()
+            def repo_status(_self, repo: str):
+                return _repo_status(repo)
+            def repo_last_commit(_self, repo: str):
+                return _repo_last_commit(repo)
+            def repo_grep(_self, repo: str, query: str, path: str):
+                return _repo_grep(repo, query, path)
+            def repo_readfile(_self, repo: str, path: str, start: int, end: int):
+                return _repo_readfile(repo, path, start, end)
+            def plan_echo(_self, text: str):
+                return _plan_echo_impl(text)
+            def approve_echo(_self, plan_id: str):
+                return _approve_echo_impl(plan_id)
+        bridge = _Bridge()
+        envelope = run_llm_tool_loop(prompt, tools_list, repo_context, max_steps, config, bridge)
+        return json.dumps(envelope)
 
     return f"unknown command: {command}"
 

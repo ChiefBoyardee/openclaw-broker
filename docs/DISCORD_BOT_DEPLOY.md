@@ -20,6 +20,10 @@ The Discord bot can run as **multiple instances** on the same VPS, each with its
 
 Broker HTTP calls use fixed connect/read timeouts so the bot does not hang if the broker is down. Job polling uses gentle backoff (0.5s → 1s → 2s) between status checks to avoid spamming the broker.
 
+**If a job command (e.g. `capabilities`, `ping`) never returns a result:** The bot waits up to `JOB_POLL_TIMEOUT_SEC` (default 120s) for a **runner** to claim the job and post the result. If no runner is connected to the broker (e.g. runner not running on WSL, or can’t reach the broker), the job stays queued and the bot will eventually reply “Still running. Job ID: … (try: `status <job_id>`)”. Commands like `capabilities` and `ping` do **not** require an LLM—the runner handles them. Start the runner on WSL with `BROKER_URL` and `WORKER_TOKEN` pointing at your broker so jobs get claimed. You can lower `JOB_POLL_TIMEOUT_SEC` in `bot.env` (e.g. to 30) so the bot gives up sooner when no runner is available.
+
+**If the bot reports "Connection refused" to the broker:** On the VPS, ensure the broker is running and listening on the address in the bot’s `BROKER_URL`. Run `sudo systemctl status openclaw-broker` and `curl -s http://127.0.0.1:8000/health` (or the host/port from your bot’s `BROKER_URL`). If the broker was started before you set `BROKER_HOST=0.0.0.0` (or `127.0.0.1`) in `/opt/openclaw-broker/broker.env`, restart it so it picks up the config: `sudo systemctl restart openclaw-broker`. Then try the bot again.
+
 ## Overview
 
 - **Template unit:** `openclaw-discord-bot@.service` — the `%i` is the instance name (e.g. `clawhub` → `openclaw-discord-bot@clawhub`).
