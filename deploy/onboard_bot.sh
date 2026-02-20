@@ -89,7 +89,7 @@ fi
 
 # 1) Run install script (creates dirs, venv, systemd template; does NOT create bot.env or start)
 echo "[onboard_bot] Running install_bot_instance.sh ..."
-"$REPO_ROOT/deploy/install_bot_instance.sh" "$INSTANCE_NAME"
+bash "$REPO_ROOT/deploy/install_bot_instance.sh" "$INSTANCE_NAME"
 # install script copies bot.env.example to $OPT_DIR/bot.env.example; we write bot.env next
 
 # 2) Write bot.env (no secrets in logs)
