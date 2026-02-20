@@ -37,6 +37,8 @@ To add a new bot by pasting tokens and config (no manual env file editing):
 ./deploy/onboard_bot.sh <instance_name>
 ```
 
+If the script is not executable (e.g. on some Windows clones), run `bash deploy/onboard_bot.sh <instance_name>` instead.
+
 You’ll be prompted for: **DISCORD_TOKEN**, **BOT_TOKEN**, **BROKER_URL**, **ALLOWED_USER_ID** (or ALLOWLIST_USER_ID), and optional ALLOWED_CHANNEL_ID. The script runs the install, writes `bot.env`, and optionally enables/starts the unit. Add `--enable` to start without prompting:
 
 ```bash

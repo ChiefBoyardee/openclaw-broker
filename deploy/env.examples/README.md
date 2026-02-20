@@ -4,7 +4,7 @@ One-place reference for all component env files. **Do not commit real `.env` or 
 
 ## Quick start (VPS)
 
-From the repo root on the VPS:
+From the repo root on the VPS. If a script is not executable (e.g. after a Windows clone), run it with `bash deploy/onboard_*.sh` instead of `./deploy/onboard_*.sh`.
 
 1. **Broker (one-time)** — install, generate tokens, create `broker.env`, optional start:
    ```bash
