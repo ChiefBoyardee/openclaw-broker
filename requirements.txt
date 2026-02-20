@@ -1,6 +1,6 @@
 # OpenClaw — shared requirements.
 # Broker: fastapi, uvicorn, pydantic
-# Runner: requests
+# Runner: requests, openai (OpenAI-compatible LLM)
 # Bot: discord.py, requests
 # Tests: pytest
 
@@ -8,5 +8,6 @@ fastapi
 uvicorn[standard]
 pydantic
 requests
+openai
 discord.py
 pytest

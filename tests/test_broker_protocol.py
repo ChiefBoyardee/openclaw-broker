@@ -39,7 +39,7 @@ def _create_job() -> str:
 
 def _job_shape(j: dict) -> None:
     """Assert standard keys exist (value can be null)."""
-    for k in ("id", "created_at", "started_at", "finished_at", "lease_until", "status", "command", "payload", "result", "error", "worker_id"):
+    for k in ("id", "created_at", "started_at", "finished_at", "lease_until", "status", "command", "payload", "result", "error", "worker_id", "requires"):
         assert k in j, f"missing key {k}"
 
 
@@ -175,3 +175,99 @@ def test_requeue_clears_worker_id_then_second_claim_sets_new():
     assert job2 is not None
     assert job2["id"] == jid
     assert job2["worker_id"] == "worker-two"
+
+
+def test_create_job_with_requires():
+    """POST /jobs accepts optional requires; GET returns it."""
+    r = client.post(
+        "/jobs",
+        headers=bot_headers,
+        json={"command": "ping", "payload": "x", "requires": '{"caps":["llm:vllm"]}'},
+    )
+    assert r.status_code == 200
+    jid = r.json()["id"]
+    r2 = client.get(f"/jobs/{jid}", headers=bot_headers)
+    assert r2.status_code == 200
+    assert r2.json().get("requires") == '{"caps":["llm:vllm"]}'
+
+
+def test_requires_caps_filter():
+    """Job with requires is claimed only by worker with matching caps; job with no requires is claimed by any."""
+    # Drain queue (may have jobs from test_create_job_with_requires) so we control state
+    drain_headers = {**worker_headers, "X-Worker-Id": "drain", "X-Worker-Caps": '["llm:vllm","repo_tools"]'}
+    while True:
+        r = client.get("/jobs/next", headers=drain_headers)
+        job = r.json().get("job")
+        if job is None:
+            break
+        client.post(f"/jobs/{job['id']}/result", headers=worker_headers, json={"result": "drained"})
+
+    # Job that requires llm:vllm
+    r = client.post(
+        "/jobs",
+        headers=bot_headers,
+        json={"command": "ping", "payload": "a", "requires": '{"caps":["llm:vllm"]}'},
+    )
+    assert r.status_code == 200
+    jid_vllm = r.json()["id"]
+    # Worker with llm:vllm gets it
+    r = client.get(
+        "/jobs/next",
+        headers={**worker_headers, "X-Worker-Id": "w-vllm", "X-Worker-Caps": '["llm:vllm","repo_tools"]'},
+    )
+    assert r.status_code == 200
+    job = r.json().get("job")
+    assert job is not None
+    assert job["id"] == jid_vllm
+    # Finish so queue is empty for next test
+    client.post(f"/jobs/{jid_vllm}/result", headers=worker_headers, json={"result": "ok"})
+
+    # New job requiring llm:vllm; worker with only llm:jetson does NOT get it
+    r = client.post(
+        "/jobs",
+        headers=bot_headers,
+        json={"command": "ping", "payload": "b", "requires": '{"caps":["llm:vllm"]}'},
+    )
+    assert r.status_code == 200
+    jid2 = r.json()["id"]
+    r = client.get(
+        "/jobs/next",
+        headers={**worker_headers, "X-Worker-Id": "w-jetson", "X-Worker-Caps": '["llm:jetson","repo_tools"]'},
+    )
+    assert r.status_code == 200
+    assert r.json().get("job") is None
+    # Worker with llm:vllm gets it
+    r = client.get(
+        "/jobs/next",
+        headers={**worker_headers, "X-Worker-Id": "w-vllm", "X-Worker-Caps": '["llm:vllm","repo_tools"]'},
+    )
+    assert r.status_code == 200
+    assert r.json().get("job") is not None
+    assert r.json()["job"]["id"] == jid2
+    client.post(f"/jobs/{jid2}/result", headers=worker_headers, json={"result": "ok"})
+
+    # Job with no requires: any worker can claim (worker without caps gets it if only one queued)
+    r = client.post("/jobs", headers=bot_headers, json={"command": "ping", "payload": "c"})
+    assert r.status_code == 200
+    jid3 = r.json()["id"]
+    r = client.get("/jobs/next", headers=worker_headers)  # no X-Worker-Caps
+    assert r.status_code == 200
+    job = r.json().get("job")
+    assert job is not None
+    assert job["id"] == jid3
+
+
+def test_requires_empty_caps_filtered():
+    """Job with requires caps that are empty strings is treated as no required caps (any worker can claim)."""
+    r = client.post(
+        "/jobs",
+        headers=bot_headers,
+        json={"command": "ping", "payload": "d", "requires": '{"caps":[""]}'},
+    )
+    assert r.status_code == 200
+    jid = r.json()["id"]
+    r = client.get("/jobs/next", headers=worker_headers)
+    assert r.status_code == 200
+    job = r.json().get("job")
+    assert job is not None
+    assert job["id"] == jid

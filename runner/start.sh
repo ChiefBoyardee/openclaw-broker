@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # OpenClaw Runner — start script for WSL (no systemd).
 # Logs to /var/log/openclaw-runner/runner.log
-# Reads env from /opt/openclaw-runner/runner.env
+# Reads env from RUNNER_ENV (default /opt/openclaw-runner/runner.env).
+# Consider logrotate for LOG_FILE (e.g. /etc/logrotate.d/openclaw-runner) to avoid unbounded growth.
 
 set -e
 RUNNER_ENV="${RUNNER_ENV:-/opt/openclaw-runner/runner.env}"

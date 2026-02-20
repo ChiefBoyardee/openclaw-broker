@@ -175,8 +175,8 @@ Clients (bot, runner, future UIs) can rely on this contract:
 
 ## Production deployment
 
-- **VPS (broker + Discord bot):** Clone to e.g. `/opt/openclaw/openclaw-broker`. **Streamlined:** run `./deploy/onboard_broker.sh` then `./deploy/onboard_bot.sh <instance>` for each bot (see [deploy/env.examples/](deploy/env.examples/)). **Manual:** Run `deploy/scripts/install_broker.sh`. For the Discord bot, the preferred approach is **multi-instance**: use the systemd template and install one instance per name (e.g. `clawhub`, `staging`) with `./deploy/install_bot_instance.sh <instance_name> [--enable]`. Each instance gets isolated dirs under `/opt/openclaw-bot-<instance>/` and `/var/lib/openclaw-bot-<instance>/`; env file is `/opt/openclaw-bot-<instance>/bot.env` (create from `bot.env.example`, never commit). Each instance needs its own Discord Application and `DISCORD_TOKEN` (and typically its own `BOT_TOKEN` and allowlist). Example: `./deploy/install_bot_instance.sh clawhub --enable` then `journalctl -u openclaw-discord-bot@clawhub -f`. See [docs/DISCORD_BOT_DEPLOY.md](docs/DISCORD_BOT_DEPLOY.md) for details. Single-instance legacy: `deploy/scripts/install_discord_bot.sh`. Create broker env and `/var/lib/openclaw-broker`; set `BROKER_HOST` to your Tailscale IP for tailnet-only binding. To configure and start the broker non-interactively on the VPS, run `./deploy/scripts/configure_and_start_broker.sh` (optionally `export BROKER_HOST=100.x.x.x` first).
-- **WSL runner:** Run `deploy/scripts/install_runner.sh`, create `runner.env` from `runner/runner.env.example` with `BROKER_URL` and `WORKER_TOKEN`, then run `runner/start.sh` or `python runner/runner.py`.
+- **VPS (broker + Discord bot):** Clone to e.g. `/opt/openclaw/openclaw-broker`. **Streamlined:** run `./deploy/onboard_broker.sh` then `./deploy/onboard_bot.sh <instance>` for each bot (see [deploy/env.examples/](deploy/env.examples/)). **Manual:** Run `deploy/scripts/install_broker.sh`. For the Discord bot, the preferred approach is **multi-instance**: use the systemd template and install one instance per name (e.g. `clawhub`, `staging`) with `./deploy/install_bot_instance.sh <instance_name> [--enable]`. Each instance gets isolated dirs under `/opt/openclaw-bot-<instance>/` and `/var/lib/openclaw-bot-<instance>/`; env file is `/opt/openclaw-bot-<instance>/bot.env` (create from `bot.env.example`, never commit). Each instance needs its own Discord Application and `DISCORD_TOKEN` (and typically its own `BOT_TOKEN` and allowlist). Example: `./deploy/install_bot_instance.sh clawhub --enable` then `journalctl -u openclaw-discord-bot@clawhub -f`. See [docs/DISCORD_BOT_DEPLOY.md](docs/DISCORD_BOT_DEPLOY.md) for details. Single-instance legacy: `deploy/scripts/install_discord_bot.sh`. Create broker env and `/var/lib/openclaw-broker`; set `BROKER_HOST` to your Tailscale IP for tailnet-only binding. To configure and start the broker non-interactively on the VPS, run `./deploy/scripts/configure_and_start_broker.sh` (optionally `export BROKER_HOST=100.x.x.x` first). **After pulling updates:** run `bash deploy/scripts/update_vps.sh` to refresh deps and restart broker and all bot instances (see [docs/DEPLOY_AND_UPDATE.md](docs/DEPLOY_AND_UPDATE.md)).
+- **WSL runner:** Run `deploy/scripts/install_runner.sh`, create `runner.env` from `runner/runner.env.example` with `BROKER_URL` and `WORKER_TOKEN`, then run `runner/start.sh` or `python runner/runner.py`. **After pulling:** run `bash deploy/scripts/update_runner_wsl.sh` then restart the runner.
 - **VPS ↔ worker:** If the runner is off-VPS (e.g. WSL), open **TCP 8000** in your cloud provider’s firewall so the worker can reach the broker. See [docs/VPS_FIREWALL.md](docs/VPS_FIREWALL.md).
 
 See [SECURITY.md](SECURITY.md) for token handling and tailnet-only binding.
@@ -204,7 +204,7 @@ openclaw-broker/
 │   ├── onboard_runner.sh         # Onboard runner: paste BROKER_URL + WORKER_TOKEN, writes runner.env
 │   ├── onboard_bot.sh            # Onboard new bot: paste tokens, creates bot.env and optionally starts
 │   ├── env.examples/             # Broker, runner, bot env examples + README (VPS + WSL)
-│   └── scripts/         # install_broker.sh, install_discord_bot.sh, install_runner.sh
+│   └── scripts/         # install_broker.sh, install_runner.sh, update_vps.sh, update_runner_*.sh
 ├── docs/
 ├── tests/
 ├── requirements.txt
@@ -218,6 +218,7 @@ openclaw-broker/
 ## Documentation
 
 - [SECURITY.md](SECURITY.md) — Token handling, tailnet-only binding, file permissions.
+- [docs/DEPLOY_AND_UPDATE.md](docs/DEPLOY_AND_UPDATE.md) — CI (pytest on push/PR), update scripts after pull, optional CD (deploy VPS from GitHub Actions).
 - [docs/DISCORD_BOT_DEPLOY.md](docs/DISCORD_BOT_DEPLOY.md) — Multi-instance Discord bot deployment (systemd template, env locations, whoami).
 - [docs/PUSHING_TO_GITHUB.md](docs/PUSHING_TO_GITHUB.md) — Sanitization checklist and push steps.
 - [docs/RUNNER_REPO_CONFIG.md](docs/RUNNER_REPO_CONFIG.md) — Defaults for future repo commands (search tool, repo paths, allowlist).
