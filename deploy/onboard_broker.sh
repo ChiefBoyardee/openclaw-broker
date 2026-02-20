@@ -36,7 +36,7 @@ _write_env_line() {
 # 1) Ensure broker is installed (venv + systemd unit)
 if [[ ! -f /etc/systemd/system/${SERVICE_NAME}.service ]]; then
   echo "[onboard_broker] Installing broker (venv + systemd unit) ..."
-  "$REPO_ROOT/deploy/scripts/install_broker.sh"
+  bash "$REPO_ROOT/deploy/scripts/install_broker.sh"
 else
   echo "[onboard_broker] Broker unit already installed."
 fi
