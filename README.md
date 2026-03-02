@@ -219,6 +219,7 @@ openclaw-broker/
 
 ## Documentation
 
+- **[INSTALLATION_GUIDE.md](docs/INSTALLATION_GUIDE.md)** — Step-by-step setup from zero to running (local + production, Discord bot, runner, optional LLM).
 - [SECURITY.md](SECURITY.md) — Token handling, tailnet-only binding, file permissions.
 - [docs/DEPLOY_AND_UPDATE.md](docs/DEPLOY_AND_UPDATE.md) — CI (pytest on push/PR), smoke script, update scripts after pull, optional CD (deploy VPS from GitHub Actions).
 - [docs/DISCORD_BOT_DEPLOY.md](docs/DISCORD_BOT_DEPLOY.md) — Multi-instance Discord bot deployment (systemd template, env locations, whoami).
