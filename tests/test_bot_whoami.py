@@ -1,10 +1,10 @@
-"""Unit test for whoami reply formatting (discord_bot.bot.format_whoami)."""
+"""Unit test for whoami reply formatting (discord_bot.bot.format_whoami, whoami_broker_url_display)."""
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from discord_bot.bot import format_whoami
+from discord_bot.bot import format_whoami, whoami_broker_url_display
 
 
 def test_format_whoami_with_allowed_user():
@@ -29,3 +29,34 @@ def test_format_whoami_without_allowed_user():
     )
     assert "**Instance:** default" in out
     assert "**Allowlisted user ID:** not set" in out
+
+
+def test_whoami_broker_url_mode_full():
+    """full: show URL unchanged."""
+    url = "http://127.0.0.1:8000"
+    assert whoami_broker_url_display(url, "full") == url
+    out = format_whoami("i", "b", whoami_broker_url_display(url, "full"), "u")
+    assert "**Broker URL:** http://127.0.0.1:8000" in out
+
+
+def test_whoami_broker_url_mode_masked():
+    """masked: scheme + host only (no path)."""
+    url = "https://broker.tail12345.ts.net:8443/jobs"
+    display = whoami_broker_url_display(url, "masked")
+    assert display == "https://broker.tail12345.ts.net:8443"
+    assert "/jobs" not in display
+    out = format_whoami("i", "b", display, "u")
+    assert "**Broker URL:** https://broker.tail12345.ts.net:8443" in out
+    assert "/jobs" not in out
+
+
+def test_whoami_broker_url_mode_hidden():
+    """hidden: show (hidden) and do not reveal URL."""
+    url = "https://secret.internal:9999"
+    display = whoami_broker_url_display(url, "hidden")
+    assert display == "(hidden)"
+    assert "secret" not in display
+    out = format_whoami("i", "b", display, "u")
+    assert "**Broker URL:** (hidden)" in out
+    assert "secret" not in out
+    assert "internal" not in out

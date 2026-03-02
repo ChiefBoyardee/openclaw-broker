@@ -45,6 +45,28 @@ def test_llm_loop_produces_envelope_with_final(mock_chat):
 
 
 @patch("runner.llm_loop.chat_with_tools")
+def test_llm_loop_policy_refused_after_consecutive_errors(mock_chat):
+    """After 3 consecutive tool errors (e.g. disallowed tool), short-circuit with policy_refused."""
+    mock_chat.return_value = {
+        "content": None,
+        "tool_calls": [{"id": "tc-1", "name": "execute_shell", "arguments": "{}"}],
+    }
+    config = {
+        "base_url": "http://localhost:8000",
+        "api_key": "",
+        "model": "test-model",
+        "temperature": 0.2,
+        "max_tokens": 100,
+        "allowed_tools": {"repo_list", "repo_grep"},
+    }
+    bridge = MockBridge()
+    envelope = run_llm_tool_loop("Run ls", ["repo_list"], None, 6, config, bridge)
+    assert envelope["final"] == "Job stopped: policy limits exceeded."
+    assert envelope.get("safety", {}).get("reason") == "policy_refused"
+    assert len(envelope["tool_calls"]) == 3  # 3 consecutive errors then stop
+
+
+@patch("runner.llm_loop.chat_with_tools")
 def test_llm_loop_one_tool_then_final(mock_chat):
     """Mock LLM returns one tool_call (repo_list) then on second call returns final text."""
     call_count = [0]

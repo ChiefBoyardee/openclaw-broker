@@ -1,13 +1,15 @@
-# OpenClaw — shared requirements.
+# OpenClaw — shared requirements (pinned for supply-chain security).
 # Broker: fastapi, uvicorn, pydantic
 # Runner: requests, openai (OpenAI-compatible LLM)
 # Bot: discord.py, requests
 # Tests: pytest
+# Run pip-audit to check for known vulnerabilities.
 
-fastapi
-uvicorn[standard]
-pydantic
-requests
-openai
-discord.py
-pytest
+fastapi>=0.109,<0.116
+uvicorn[standard]>=0.30,<0.35
+pydantic>=2.5,<3
+requests>=2.31,<3
+openai>=1.40,<2
+discord.py>=2.3,<3
+pytest>=8.0,<9
+ruff>=0.4,<0.15

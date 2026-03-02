@@ -11,9 +11,12 @@ import re
 import sys
 import time
 from typing import Optional
+from urllib.parse import urlparse
 
 import discord
 import requests
+
+from discord_bot.redaction import redact_for_display as _redact_for_display
 
 # --- Config from env ---
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "")
@@ -27,6 +30,7 @@ JOB_POLL_TIMEOUT_SEC = float(os.environ.get("JOB_POLL_TIMEOUT_SEC", "120"))
 BOT_COOLDOWN_SECONDS = float(os.environ.get("BOT_COOLDOWN_SECONDS", "3"))
 BOT_MAX_CONCURRENT = int(os.environ.get("BOT_MAX_CONCURRENT", "1"))
 INSTANCE_NAME = os.environ.get("INSTANCE_NAME", "default")
+WHOAMI_BROKER_URL_MODE = os.environ.get("WHOAMI_BROKER_URL_MODE", "full").strip().lower()
 
 MAX_DISPLAY_LEN = 1500
 
@@ -49,13 +53,8 @@ ALLOWLIST_IDS = _parse_allowlist_ids()
 
 
 def redact(text: str) -> str:
-    """Replace any occurrence of configured tokens with *** so they are never logged."""
-    out = text
-    if BOT_TOKEN:
-        out = out.replace(BOT_TOKEN, "***")
-    if DISCORD_TOKEN:
-        out = out.replace(DISCORD_TOKEN, "***")
-    return out
+    """Apply redaction and instruction-leak guard for user-facing output."""
+    return _redact_for_display(text, BOT_TOKEN, DISCORD_TOKEN)
 
 
 def _strip_phrase_any_case(text: str, phrase: str) -> str:
@@ -72,6 +71,21 @@ def _allowlist_display() -> str:
     if not ALLOWLIST_IDS:
         return "not set"
     return ", ".join(sorted(ALLOWLIST_IDS))
+
+
+def whoami_broker_url_display(broker_url: str, mode: str) -> str:
+    """Return the broker URL string to show in whoami. mode: full, masked, hidden."""
+    if mode == "hidden":
+        return "(hidden)"
+    if mode == "masked":
+        try:
+            p = urlparse(broker_url)
+            if p.scheme and p.netloc:
+                return f"{p.scheme}://{p.netloc}"
+            return broker_url
+        except Exception:
+            return "(hidden)"
+    return broker_url
 
 
 def format_whoami(instance_name: str, bot_user_id: str, broker_url: str, allowed_user_id: str) -> str:
@@ -467,8 +481,9 @@ async def on_message(message: discord.Message):
 
     if cmd == "whoami":
         bot_id = str(client.user.id) if client.user else "?"
+        broker_display = whoami_broker_url_display(BROKER_URL, WHOAMI_BROKER_URL_MODE)
         await message.reply(
-            format_whoami(INSTANCE_NAME, bot_id, BROKER_URL, _allowlist_display())
+            format_whoami(INSTANCE_NAME, bot_id, broker_display, _allowlist_display())
         )
         return
 

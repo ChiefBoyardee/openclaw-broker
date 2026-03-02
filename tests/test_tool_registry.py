@@ -10,6 +10,7 @@ from runner.tool_registry import (
     dispatch,
     get_tools_schema,
     parse_tool_args,
+    reject_url_like_input,
     TOOL_DEFINITIONS,
 )
 
@@ -87,3 +88,25 @@ def test_dispatch_tool_not_in_allowed_rejected():
     bridge.allowed_tools = {"repo_list"}
     with pytest.raises(ValueError, match="not allowed"):
         dispatch("repo_status", {"repo": "x"}, None, runner_bridge=bridge)
+
+
+def test_reject_url_like_input_https():
+    with pytest.raises(ValueError, match="must not be a URL"):
+        reject_url_like_input("https://evil.com/path", "query")
+
+
+def test_reject_url_like_input_file():
+    with pytest.raises(ValueError, match="must not be a URL"):
+        reject_url_like_input("file:///etc/passwd", "path")
+
+
+def test_reject_url_like_input_allows_normal_path():
+    reject_url_like_input("src/main.py", "path")
+    reject_url_like_input("docs/http-server.md", "path")
+
+
+def test_dispatch_repo_grep_rejects_url_in_query():
+    bridge = MockBridge()
+    bridge.allowed_tools = {"repo_grep", "repo_list"}
+    with pytest.raises(ValueError, match="must not be a URL"):
+        dispatch("repo_grep", {"repo": "x", "query": "https://exfil.com"}, None, runner_bridge=bridge)

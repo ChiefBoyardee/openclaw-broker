@@ -49,6 +49,14 @@ def test_health():
     assert r.json() == {"ok": True, "ts_bound": True}
 
 
+def test_wal_mode_enabled():
+    """Broker enables WAL at startup; test DB should report journal_mode=wal."""
+    with broker_app_module.db_conn() as conn:
+        row = conn.execute("PRAGMA journal_mode").fetchone()
+    mode = (row[0] or "").strip().lower() if row else ""
+    assert mode == "wal", f"expected journal_mode=wal, got {mode!r}"
+
+
 def test_get_job_returns_standard_shape():
     jid = _create_job()
     r = client.get(f"/jobs/{jid}", headers=bot_headers)
@@ -271,3 +279,124 @@ def test_requires_empty_caps_filtered():
     job = r.json().get("job")
     assert job is not None
     assert job["id"] == jid
+
+
+def test_auth_401_missing_bot_token():
+    """POST /jobs without X-Bot-Token returns 401."""
+    r = client.post("/jobs", json={"command": "ping", "payload": "x"})
+    assert r.status_code == 401
+    assert "test-bot-token" not in r.text.lower()
+    assert "traceback" not in r.text.lower()
+
+
+def test_auth_401_wrong_bot_token():
+    """POST /jobs with wrong X-Bot-Token returns 401."""
+    r = client.post(
+        "/jobs",
+        headers={"X-Bot-Token": "wrong-token"},
+        json={"command": "ping", "payload": "x"},
+    )
+    assert r.status_code == 401
+    assert "wrong-token" not in r.text
+
+
+def test_unknown_command_returns_400():
+    """POST /jobs with unknown command returns 400."""
+    r = client.post(
+        "/jobs",
+        headers=bot_headers,
+        json={"command": "evil_command", "payload": "x"},
+    )
+    assert r.status_code == 400
+    body = r.json()
+    assert "invalid command" in body.get("detail", "").lower()
+
+
+def test_rate_limit_returns_429_and_safe_body():
+    """When RATE_LIMIT_JOBS_PER_MIN is set and exceeded, create returns 429."""
+    orig = broker_app_module.RATE_LIMIT_JOBS_PER_MIN
+    try:
+        broker_app_module.RATE_LIMIT_JOBS_PER_MIN = 2
+        r1 = client.post("/jobs", headers=bot_headers, json={"command": "ping", "payload": "a"})
+        r2 = client.post("/jobs", headers=bot_headers, json={"command": "ping", "payload": "b"})
+        r3 = client.post("/jobs", headers=bot_headers, json={"command": "ping", "payload": "c"})
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        assert r3.status_code == 429
+        assert "rate limit exceeded" in r3.json().get("detail", "")
+        assert "test-bot-token" not in r3.text
+    finally:
+        broker_app_module.RATE_LIMIT_JOBS_PER_MIN = orig
+
+
+def test_request_body_too_large_returns_413():
+    """POST /jobs with body exceeding MAX_REQUEST_BODY_BYTES returns 413."""
+    orig = broker_app_module.MAX_REQUEST_BODY_BYTES
+    try:
+        broker_app_module.MAX_REQUEST_BODY_BYTES = 50
+        r = client.post(
+            "/jobs",
+            headers=bot_headers,
+            json={"command": "ping", "payload": "x" * 100},
+        )
+        assert r.status_code == 413
+    finally:
+        broker_app_module.MAX_REQUEST_BODY_BYTES = orig
+
+
+def test_max_queued_jobs_unset_allows_creates():
+    """When MAX_QUEUED_JOBS is not set, creates are not limited (no 429)."""
+    # Default state: MAX_QUEUED_JOBS is None
+    r = client.post("/jobs", headers=bot_headers, json={"command": "ping", "payload": "x"})
+    assert r.status_code == 200
+    assert "id" in r.json()
+
+
+def test_max_queued_jobs_cap_returns_429_and_safe_body():
+    """When at MAX_QUEUED_JOBS cap, create returns 429; after completing one, next create succeeds."""
+    # Drain as much as we can (worker with broad caps)
+    drain_headers = {
+        **worker_headers,
+        "X-Worker-Id": "drain",
+        "X-Worker-Caps": '["llm:vllm", "llm:jetson", "repo_tools"]',
+    }
+    for _ in range(100):
+        r = client.get("/jobs/next", headers=drain_headers)
+        if r.json().get("job") is None:
+            break
+        jid = r.json()["job"]["id"]
+        client.post(f"/jobs/{jid}/result", headers=worker_headers, json={"result": "drained"})
+    with broker_app_module.db_conn() as conn:
+        (base_count,) = conn.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')"
+        ).fetchone()
+    cap = base_count + 2
+    orig = broker_app_module.MAX_QUEUED_JOBS
+    try:
+        broker_app_module.MAX_QUEUED_JOBS = cap
+        r1 = client.post("/jobs", headers=bot_headers, json={"command": "ping", "payload": "a"})
+        r2 = client.post("/jobs", headers=bot_headers, json={"command": "ping", "payload": "b"})
+        assert r1.status_code == 200
+        assert r2.status_code == 200
+        r3 = client.post("/jobs", headers=bot_headers, json={"command": "ping", "payload": "c"})
+        assert r3.status_code == 429
+        body = r3.text
+        assert "job queue limit reached" in body or "detail" in body
+        assert "test-bot-token" not in body
+        assert "traceback" not in body.lower() and "Traceback" not in body
+        # Complete one job so we're under cap
+        r = client.get("/jobs/next", headers=worker_headers)
+        job = r.json().get("job")
+        assert job is not None
+        client.post(f"/jobs/{job['id']}/result", headers=worker_headers, json={"result": "ok"})
+        r4 = client.post("/jobs", headers=bot_headers, json={"command": "ping", "payload": "d"})
+        assert r4.status_code == 200
+        # Drain the 3 jobs we created (a, b, d) so later tests get a clean queue
+        for _ in range(3):
+            r = client.get("/jobs/next", headers=worker_headers)
+            if r.json().get("job") is None:
+                break
+            jid = r.json()["job"]["id"]
+            client.post(f"/jobs/{jid}/result", headers=worker_headers, json={"result": "ok"})
+    finally:
+        broker_app_module.MAX_QUEUED_JOBS = orig

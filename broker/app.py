@@ -36,20 +36,38 @@ Notes:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sqlite3
+import sys
 import time
 import uuid
+from collections import defaultdict
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
+
+from broker.caps import is_command_allowed, job_matches_worker, parse_worker_caps
 
 DB_PATH = os.environ.get("BROKER_DB", "/var/lib/openclaw-broker/broker.db")
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 LEASE_SECONDS = int(os.environ.get("LEASE_SECONDS", "60"))
+_raw_max_queued = os.environ.get("MAX_QUEUED_JOBS", "").strip()
+MAX_QUEUED_JOBS: Optional[int] = int(_raw_max_queued) if _raw_max_queued else None
+
+# Sprint 3: rate limit and request limits
+_raw_rate = os.environ.get("RATE_LIMIT_JOBS_PER_MIN", "").strip()
+RATE_LIMIT_JOBS_PER_MIN: Optional[int] = int(_raw_rate) if _raw_rate and int(_raw_rate) > 0 else None
+_raw_body = os.environ.get("MAX_REQUEST_BODY_BYTES", "").strip()
+MAX_REQUEST_BODY_BYTES = int(_raw_body) if _raw_body and int(_raw_body) > 0 else 524288  # 512KB default
+MAX_PAYLOAD_BYTES = 262144  # 256KB
+MAX_REQUIRES_BYTES = 2048  # 2KB
+
+# Rate limit: token_hash -> list of create timestamps in last 60s (purged periodically)
+_rate_limit_store: dict[str, list[float]] = defaultdict(list)
 
 app = FastAPI(title="OpenClaw Broker")
 
@@ -138,8 +156,20 @@ def migrate_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_worker_id ON jobs(worker_id)")
 
 
+def enable_wal() -> None:
+    """Enable WAL mode and recommended pragmas. Call after init_db/migrate_db. Also sets PRAGMA synchronous=NORMAL (recommended with WAL)."""
+    with db_conn() as conn:
+        row = conn.execute("PRAGMA journal_mode=WAL").fetchone()
+        mode = (row[0] or "").strip().lower() if row else ""
+        if mode != "wal":
+            raise RuntimeError(f"PRAGMA journal_mode=WAL did not stick: got {mode!r}")
+        conn.execute("PRAGMA synchronous=NORMAL")
+    return None
+
+
 init_db()
 migrate_db()
+enable_wal()
 
 
 # ----------------------------
@@ -164,42 +194,20 @@ def require_bot_token(
 
 
 # ----------------------------
-# Capability matching (Sprint 5)
+# Capability matching (Sprint 5) — see broker.caps
 # ----------------------------
-def _parse_worker_caps(header_value: Optional[str]) -> set[str]:
-    """Parse X-Worker-Caps: JSON array or comma-separated list. Returns set of cap strings."""
-    if not header_value or not (header_value := header_value.strip()):
-        return set()
-    if header_value.startswith("["):
-        try:
-            arr = json.loads(header_value)
-            return set(str(c).strip() for c in arr if c)
-        except (json.JSONDecodeError, TypeError):
-            pass
-    return {c.strip() for c in header_value.split(",") if c.strip()}
 
 
-def _job_required_caps(requires: Optional[str]) -> Optional[set[str]]:
-    """Parse job requires JSON e.g. {"caps": ["llm:vllm"]}. Returns set of caps or None if invalid/null."""
-    if not requires or not (requires := requires.strip()):
-        return None
-    try:
-        obj = json.loads(requires)
-        caps = obj.get("caps")
-        if caps is None:
-            return None
-        # Filter out empty/falsy caps for consistency with _parse_worker_caps
-        return set(str(c).strip() for c in caps if c is not None and str(c).strip()) if caps else set()
-    except (json.JSONDecodeError, TypeError):
-        return None
-
-
-def _job_matches_worker(requires: Optional[str], worker_caps: set[str]) -> bool:
-    """True if job can be claimed by worker: requires is NULL/empty or job required caps ⊆ worker_caps."""
-    required = _job_required_caps(requires)
-    if required is None or len(required) == 0:
-        return True
-    return required <= worker_caps
+# ----------------------------
+# Audit (Sprint 3) — structured events, no secrets
+# ----------------------------
+def _audit(event: str, **kwargs: Any) -> None:
+    """Emit structured audit line to stderr. No tokens or payload content."""
+    parts = [f"event={event}"]
+    for k, v in kwargs.items():
+        if v is not None:
+            parts.append(f"{k}={v}")
+    print(" ".join(parts), file=sys.stderr)
 
 
 # ----------------------------
@@ -228,15 +236,81 @@ def health():
     return {"ok": True, "ts_bound": True}
 
 
+def _rate_limit_check(x_bot_token: Optional[str]) -> None:
+    """Raise 429 if over rate limit. Key by token hash."""
+    if RATE_LIMIT_JOBS_PER_MIN is None or not x_bot_token:
+        return
+    now = time.time()
+    key = hashlib.sha256(x_bot_token.encode()).hexdigest()[:16]
+    window_start = now - 60
+    # Purge old entries
+    _rate_limit_store[key] = [t for t in _rate_limit_store[key] if t > window_start]
+    if len(_rate_limit_store[key]) >= RATE_LIMIT_JOBS_PER_MIN:
+        _audit("job_rejected_rate_limit")
+        raise HTTPException(429, detail="rate limit exceeded")
+    _rate_limit_store[key].append(now)
+
+
 @app.post("/jobs", dependencies=[Depends(require_bot_token)])
-def create_job(job: JobCreate):
+async def create_job(
+    request: Request,
+    x_bot_token: Optional[str] = Header(default=None, alias="X-Bot-Token"),
+):
+    # Read body with size limit (Sprint 3)
+    body_bytes = b""
+    async for chunk in request.stream():
+        body_bytes += chunk
+        if len(body_bytes) > MAX_REQUEST_BODY_BYTES:
+            _audit("job_rejected", reason="body_too_large")
+            raise HTTPException(413, detail="request body too large")
+    try:
+        data = json.loads(body_bytes) if body_bytes else {}
+    except json.JSONDecodeError:
+        raise HTTPException(400, detail="invalid JSON")
+
+    command = (data.get("command") or "").strip()
+    payload = data.get("payload") or ""
+    requires_raw = data.get("requires")
+    if requires_raw is None:
+        requires = None
+    elif isinstance(requires_raw, str):
+        requires = requires_raw
+    else:
+        requires = json.dumps(requires_raw)
+
+    # Command allowlist (Sprint 3)
+    if not is_command_allowed(command):
+        _audit("job_rejected", reason="invalid_command", command=command)
+        raise HTTPException(400, detail="invalid command")
+
+    # Payload and requires size caps
+    payload_bytes = len((payload or "").encode("utf-8"))
+    requires_bytes = len((requires or "").encode("utf-8"))
+    if payload_bytes > MAX_PAYLOAD_BYTES:
+        _audit("job_rejected", reason="payload_too_large")
+        raise HTTPException(400, detail="payload too large")
+    if requires_bytes > MAX_REQUIRES_BYTES:
+        _audit("job_rejected", reason="requires_too_large")
+        raise HTTPException(400, detail="requires too large")
+
+    # Rate limit (Sprint 3)
+    _rate_limit_check(x_bot_token)
+
     jid = str(uuid.uuid4())
     now = int(time.time())
     with db_conn() as conn:
+        if MAX_QUEUED_JOBS is not None and MAX_QUEUED_JOBS > 0:
+            (cur_count,) = conn.execute(
+                "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'running')"
+            ).fetchone()
+            if cur_count >= MAX_QUEUED_JOBS:
+                _audit("job_rejected", reason="queue_cap")
+                raise HTTPException(429, detail="job queue limit reached")
         conn.execute(
             "INSERT INTO jobs(id, created_at, status, command, payload, requires) VALUES(?,?,?,?,?,?)",
-            (jid, now, "queued", job.command, job.payload, job.requires),
+            (jid, now, "queued", command, payload, requires),
         )
+    _audit("job_created", job_id=jid, command=command)
     return {"id": jid, "status": "queued"}
 
 
@@ -254,7 +328,7 @@ def next_job(
     now = int(time.time())
     lease_until = now + LEASE_SECONDS
     worker_id = (x_worker_id or "").strip() or None
-    worker_caps = _parse_worker_caps(x_worker_caps)
+    worker_caps = parse_worker_caps(x_worker_caps)
     with db_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         # 1) Requeue stale running jobs; clear worker_id
@@ -271,7 +345,7 @@ def next_job(
         ).fetchall()
         job_id = None
         for row in rows:
-            if _job_matches_worker(row["requires"], worker_caps):
+            if job_matches_worker(row["requires"], worker_caps):
                 job_id = row["id"]
                 break
         if not job_id:
@@ -292,6 +366,7 @@ def next_job(
         # Re-fetch to get standardized shape (row may have old columns only before migration)
         row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         conn.execute("COMMIT")
+        _audit("job_claimed", job_id=job_id, worker_id=worker_id)
         return {"job": row_to_job_dict(row)}
 
 
@@ -332,6 +407,7 @@ def finish_job(job_id: str, body: JobResult):
             "UPDATE jobs SET status='done', result=?, finished_at=?, lease_until=NULL WHERE id=?",
             (body.result, now, job_id),
         )
+    _audit("job_done", job_id=job_id)
     return {"ok": True, "status": "done"}
 
 
@@ -360,6 +436,7 @@ def fail_job(job_id: str, body: JobFail):
             "UPDATE jobs SET status='failed', error=?, finished_at=?, lease_until=NULL WHERE id=?",
             (err, now, job_id),
         )
+    _audit("job_failed", job_id=job_id)
     return {"ok": True, "status": "failed"}
 
 
@@ -368,4 +445,10 @@ if __name__ == "__main__":
 
     host = os.environ.get("BROKER_HOST", "127.0.0.1")
     port = int(os.environ.get("BROKER_PORT", "8000"))
+    if host == "0.0.0.0" and os.environ.get("BROKER_BIND_PUBLIC", "").strip() != "1":
+        print(
+            "[broker] WARNING: BROKER_HOST=0.0.0.0 binds to all interfaces. "
+            "Set BROKER_BIND_PUBLIC=1 to suppress this warning.",
+            file=sys.stderr,
+        )
     uvicorn.run(app, host=host, port=port)

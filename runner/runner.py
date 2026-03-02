@@ -17,6 +17,7 @@ import requests
 
 from runner.llm_config import get_llm_config
 from runner.llm_loop import run_llm_tool_loop
+from runner.redaction import redact_output, should_redact_output
 
 # --- Config from env ---
 BROKER_URL = os.environ.get("BROKER_URL", "http://127.0.0.1:8000").strip().rstrip("/")
@@ -342,6 +343,8 @@ def main():
 
             try:
                 result = run_job(command, payload)
+                if should_redact_output():
+                    result = redact_output(result)
                 ok = _post_with_retry(
                     "result",
                     f"{BROKER_URL}/jobs/{job_id}/result",
@@ -352,6 +355,8 @@ def main():
                     print(f"[runner] result posted id={job_id}")
             except Exception as e:
                 err_msg = str(e) or "unknown"
+                if should_redact_output():
+                    err_msg = redact_output(err_msg)
                 print(f"[runner] job failed: {err_msg}", file=sys.stderr)
                 ok = _post_with_retry(
                     "fail",
