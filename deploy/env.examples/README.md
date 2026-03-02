@@ -2,6 +2,8 @@
 
 One-place reference for all component env files. **Do not commit real `.env` or `*.env` files** — only the `.example` files live in git.
 
+For a complete, beginner-friendly setup walkthrough (local + production, Discord, runner, optional LLM), see [docs/INSTALLATION_GUIDE.md](../../docs/INSTALLATION_GUIDE.md).
+
 ## Quick start (VPS)
 
 From the repo root on the VPS. If a script is not executable (e.g. after a Windows clone), run it with `bash deploy/onboard_*.sh` instead of `./deploy/onboard_*.sh`.
