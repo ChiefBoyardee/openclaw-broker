@@ -28,21 +28,21 @@ Each repo path must exist and be a git repo (have a `.git` directory). Commands 
 {
   "knucklebot": "knucklebot",
   "urgo_ai": "urgo/urgo_ai",
-  "openclaw": "/home/jay/src/openclaw-broker"
+  "openclaw": "/home/user/src/openclaw-broker"
 }
 ```
 
-With `RUNNER_REPOS_BASE=/home/jay/src`:
+With `RUNNER_REPOS_BASE=/home/user/src`:
 
-- `knucklebot` → `/home/jay/src/knucklebot`
-- `urgo_ai` → `/home/jay/src/urgo/urgo_ai`
-- `openclaw` → `/home/jay/src/openclaw-broker` (absolute but under base)
+- `knucklebot` → `/home/user/src/knucklebot`
+- `urgo_ai` → `/home/user/src/urgo/urgo_ai`
+- `openclaw` → `/home/user/src/openclaw-broker` (absolute but under base)
 
 ## Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `RUNNER_REPOS_BASE` | `/home/jay/src` | Base directory for repos; relative allowlist entries are joined with this. |
+| `RUNNER_REPOS_BASE` | `/home/user/src` | Base directory for repos; relative allowlist entries are joined with this. |
 | `RUNNER_REPO_ALLOWLIST` | `/etc/openclaw/repos.json` | Path to allowlist JSON. Fallback: `RUNNER_STATE_DIR/repos.json` if missing/unreadable. |
 | `RUNNER_CMD_TIMEOUT_SECONDS` | `15` | Timeout for git/rg subprocesses. |
 | `RUNNER_MAX_OUTPUT_BYTES` | `20000` | Max bytes for command output (e.g. status porcelain, grep matches). |

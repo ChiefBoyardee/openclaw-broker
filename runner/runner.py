@@ -28,7 +28,7 @@ POLL_INTERVAL_SEC = int(os.environ.get("POLL_INTERVAL_SEC", "10"))
 RESULT_TIMEOUT_SEC = int(os.environ.get("RESULT_TIMEOUT_SEC", "300"))
 
 # Repo commands (Sprint 3)
-RUNNER_REPOS_BASE = os.environ.get("RUNNER_REPOS_BASE", "/home/jay/src")
+RUNNER_REPOS_BASE = os.environ.get("RUNNER_REPOS_BASE", "/home/user/src")
 RUNNER_REPO_ALLOWLIST = os.environ.get("RUNNER_REPO_ALLOWLIST", "/etc/openclaw/repos.json")
 RUNNER_CMD_TIMEOUT_SECONDS = int(os.environ.get("RUNNER_CMD_TIMEOUT_SECONDS", "15"))
 RUNNER_MAX_OUTPUT_BYTES = int(os.environ.get("RUNNER_MAX_OUTPUT_BYTES", "20000"))
