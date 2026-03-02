@@ -69,7 +69,7 @@ LLM_TOOL_LOOP_MAX_STEPS=6
 # LLM_ALLOWED_TOOLS=repo_list,repo_status,repo_last_commit,repo_grep,repo_readfile,plan_echo,approve_echo  # optional; default is all
 
 # Repo
-RUNNER_REPOS_BASE=/home/jay/src
+RUNNER_REPOS_BASE=/home/user/src
 RUNNER_REPO_ALLOWLIST=/etc/openclaw/repos.json
 # Or fallback: leave unset to use RUNNER_STATE_DIR/repos.json
 
