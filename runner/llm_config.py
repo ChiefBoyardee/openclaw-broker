@@ -15,6 +15,8 @@ def get_llm_config() -> dict:
     temperature = float(os.environ.get("LLM_TEMPERATURE", "0.2"))
     max_tokens = int(os.environ.get("LLM_MAX_TOKENS", "4096"))
     max_steps = int(os.environ.get("LLM_TOOL_LOOP_MAX_STEPS", "6"))
+    max_output_bytes = int(os.environ.get("LLM_MAX_OUTPUT_BYTES", "65536"))  # 64KB default
+    max_tool_arg_bytes = int(os.environ.get("LLM_MAX_TOOL_ARG_BYTES", "4096"))  # 4KB default
     allowed_str = (os.environ.get("LLM_ALLOWED_TOOLS", "") or "").strip()
     allowed_tools = {t.strip() for t in allowed_str.split(",") if t.strip()} if allowed_str else set()
     if not allowed_tools:
@@ -36,5 +38,7 @@ def get_llm_config() -> dict:
         "temperature": temperature,
         "max_tokens": max_tokens,
         "max_steps": max_steps,
+        "max_output_bytes": max_output_bytes,
+        "max_tool_arg_bytes": max_tool_arg_bytes,
         "allowed_tools": allowed_tools,
     }

@@ -1,0 +1,18 @@
+[project]
+name = "openclaw-broker"
+version = "0.1.0"
+description = "OpenClaw Broker — FastAPI broker + Discord bot + runner"
+readme = "README.md"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests and scripts set env before importing broker (E402); unused imports ok
+"tests/*" = ["F401", "E402"]
+"scripts/*" = ["F401", "E402"]

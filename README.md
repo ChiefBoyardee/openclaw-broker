@@ -26,7 +26,7 @@ A small, secure job queue: **broker** (FastAPI + SQLite), **runner** (worker tha
 |-------------|------|
 | **Broker**  | FastAPI app: `GET /health`, `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/next`, `POST /jobs/{id}/result`, `POST /jobs/{id}/fail`. Auth via `X-Bot-Token` and `X-Worker-Token`. Jobs support `failed` status, leases, and worker identity; stale running jobs are requeued. |
 | **Runner**  | Worker process: polls `GET /jobs/next` (sends `X-Worker-Id`), runs jobs (`ping`, `capabilities`, `plan_echo`, `approve_echo`, `repo_list`, `repo_status`, `repo_last_commit`, `repo_grep`, `repo_readfile`), posts results or failures. For WSL or a dedicated worker machine. See [docs/RUNNER_REPO_CONFIG.md](docs/RUNNER_REPO_CONFIG.md) for repo allowlist and env. |
-| **Discord bot** | Listens in DMs (or one channel); allowlisted user can send `ping`, `capabilities`, `plan <text>`, `approve <plan_id>`, `status <id>`, `repos`, `repostat <repo>`, `last <repo>`, `grep <repo> <query> [path]`, `cat <repo> <path> [start] [end]`, `whoami`. Guardrails: cooldown and max concurrent jobs per user. |
+| **Discord bot** | Listens in DMs (or one channel); allowlisted user can send `ping`, `capabilities`, `plan <text>`, `approve <plan_id>`, `status <id>`, `repos`, `repostat <repo>`, `last <repo>`, `grep <repo> <query> [path]`, `cat <repo> <path> [start] [end]`, `ask <prompt>`, `urgo <prompt>`, `whoami`. Guardrails: cooldown and max concurrent jobs per user. |
 
 ---
 
@@ -197,6 +197,8 @@ openclaw-broker/
 ├── discord_bot/
 │   ├── bot.py
 │   └── bot.env.example
+├── scripts/
+│   └── smoke.py         # Smoke test (broker + simulated worker/bot)
 ├── deploy/
 │   ├── systemd/         # openclaw-discord-bot@.service (multi-instance), openclaw-broker.service.template
 │   ├── install_bot_instance.sh   # Install one bot instance (multi-instance deploy)
@@ -218,8 +220,11 @@ openclaw-broker/
 ## Documentation
 
 - [SECURITY.md](SECURITY.md) — Token handling, tailnet-only binding, file permissions.
-- [docs/DEPLOY_AND_UPDATE.md](docs/DEPLOY_AND_UPDATE.md) — CI (pytest on push/PR), update scripts after pull, optional CD (deploy VPS from GitHub Actions).
+- [docs/DEPLOY_AND_UPDATE.md](docs/DEPLOY_AND_UPDATE.md) — CI (pytest on push/PR), smoke script, update scripts after pull, optional CD (deploy VPS from GitHub Actions).
 - [docs/DISCORD_BOT_DEPLOY.md](docs/DISCORD_BOT_DEPLOY.md) — Multi-instance Discord bot deployment (systemd template, env locations, whoami).
+- [docs/BROKER_BACKUP_RETENTION.md](docs/BROKER_BACKUP_RETENTION.md) — Broker DB backup, retention/pruning, sensitive data.
+- [docs/WSL_RUNNER_LOGS.md](docs/WSL_RUNNER_LOGS.md) — WSL runner log rotation (logrotate).
+- [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md) — Env vars and rollback for releases.
 - [docs/PUSHING_TO_GITHUB.md](docs/PUSHING_TO_GITHUB.md) — Sanitization checklist and push steps.
 - [docs/RUNNER_REPO_CONFIG.md](docs/RUNNER_REPO_CONFIG.md) — Defaults for future repo commands (search tool, repo paths, allowlist).
 

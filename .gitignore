@@ -24,10 +24,16 @@ broker.db
 logs/
 *.log
 
+# Runner state (plans, local state)
+runner_state/
+
 # Test and tooling
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Ruff
+.ruff_cache/
 
 # IDE and OS
 .idea/

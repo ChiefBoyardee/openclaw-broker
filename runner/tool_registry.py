@@ -4,7 +4,25 @@ Tool registry and dispatcher for LLM tool-calling (Sprint 5). OpenAI function-ca
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Optional
+import re
+from typing import Any, Optional
+
+# URL-like pattern: reject strings that could be used for SSRF (Sprint 3)
+_URL_LIKE_RE = re.compile(
+    r"^(https?|file|ftp|data)\s*:\s*//",
+    re.IGNORECASE,
+)
+
+
+def reject_url_like_input(s: str, field_name: str = "input") -> None:
+    """
+    Raise ValueError if string looks like a URL. Prevents accidental SSRF via tool args.
+    """
+    if not s or not isinstance(s, str):
+        return
+    stripped = s.strip()
+    if _URL_LIKE_RE.search(stripped):
+        raise ValueError(f"{field_name} must not be a URL")
 
 
 # OpenAI-style tool definitions (function name, description, parameters schema)
@@ -144,7 +162,9 @@ def dispatch(
         if not repo:
             raise ValueError("repo required")
         query = args.get("query", "")
+        reject_url_like_input(str(query), "query")
         path = args.get("path") or path_hint
+        reject_url_like_input(str(path or ""), "path")
         return runner_bridge.repo_grep(repo, query, path or "")
     if name == "repo_readfile":
         if not repo:
@@ -152,11 +172,13 @@ def dispatch(
         path = args.get("path", "")
         if not path:
             raise ValueError("path required")
+        reject_url_like_input(str(path), "path")
         start = int(args.get("start_line", 1))
         end = int(args.get("end_line", 200))
         return runner_bridge.repo_readfile(repo, path, start, end)
     if name == "plan_echo":
         text = args.get("text", "")
+        reject_url_like_input(str(text), "text")
         return runner_bridge.plan_echo(text)
     if name == "approve_echo":
         plan_id = (args.get("plan_id") or "").strip()

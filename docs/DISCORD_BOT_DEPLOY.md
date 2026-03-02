@@ -164,6 +164,12 @@ From an allowlisted DM, send `whoami`. The bot replies with:
 
 No broker call; useful to confirm which instance and config you’re talking to.
 
+Optional env **`WHOAMI_BROKER_URL_MODE`**: `full` (default), `masked` (scheme+host only), or `hidden` (shows "(hidden)") to avoid exposing the full broker URL in whoami.
+
+- **`full`** (default): whoami shows the full broker URL (e.g. `http://127.0.0.1:8000` or `https://broker.tail12345.ts.net:8443`).
+- **`masked`**: whoami shows scheme and host only (e.g. `https://broker.tail12345.ts.net:8443`); path and query are omitted.
+- **`hidden`**: whoami shows `(hidden)`; the URL is not revealed.
+
 ## Hardening (systemd unit)
 
 The template unit uses:

@@ -12,6 +12,16 @@ GitHub Actions runs tests on every push and pull request to `main`/`master`.
 - **What it does:** Checks out the repo, installs dependencies from `requirements.txt`, runs `pytest tests/` on Python 3.11 and 3.12.
 - **No setup required:** Works as long as the repo is on GitHub and Actions are enabled.
 
+### Smoke script (broker + simulated worker/bot)
+
+A minimal end-to-end smoke run without Discord or a real runner:
+
+```bash
+python scripts/smoke.py
+```
+
+Uses an in-process broker with a temp DB. **Success:** exit 0 and a single line `Smoke OK`. **Failure:** exit 1 and the script prints `Smoke failed: <reason>` to stderr (if run outside the repo, check broker/runner dependencies). Optional env: `WORKER_TOKEN`, `BOT_TOKEN` (defaults are fine for local run).
+
 ---
 
 ## Updating after a pull
@@ -32,7 +42,7 @@ This will:
 2. **Broker:** Install/refresh dependencies in `.venv-broker` and restart `openclaw-broker`.
 3. **Bots:** For each `/opt/openclaw-bot-<instance>/`, copy the latest `discord_bot` and `requirements.txt`, run `pip install` in that instance’s venv, and restart `openclaw-discord-bot@<instance>`.
 
-Requires `sudo` for `systemctl restart`. The broker’s DB migration (e.g. new columns) runs automatically on broker startup.
+Requires `sudo` for `systemctl restart`. The broker’s DB migration (e.g. new columns) runs automatically on broker startup. For backup and retention, see [Broker backup and retention](BROKER_BACKUP_RETENTION.md).
 
 ### Jetson (runner with systemd)
 
