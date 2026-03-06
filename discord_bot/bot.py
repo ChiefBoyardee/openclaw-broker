@@ -18,6 +18,21 @@ import requests
 
 from discord_bot.redaction import redact_for_display as _redact_for_display
 
+# Import conversational features (optional - graceful degradation if not available)
+try:
+    from .chat_commands import (
+        handle_chat_command,
+        handle_persona_command,
+        handle_memory_command,
+        handle_remember_command,
+        handle_history_command,
+    )
+    from .memory import get_memory
+    from .personality import get_personality_engine
+    HAS_CONVERSATION_FEATURES = True
+except ImportError:
+    HAS_CONVERSATION_FEATURES = False
+
 # --- Config from env ---
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "")
 BROKER_URL = os.environ.get("BROKER_URL", "http://127.0.0.1:8000").strip().rstrip("/")
@@ -31,6 +46,15 @@ BOT_COOLDOWN_SECONDS = float(os.environ.get("BOT_COOLDOWN_SECONDS", "3"))
 BOT_MAX_CONCURRENT = int(os.environ.get("BOT_MAX_CONCURRENT", "1"))
 INSTANCE_NAME = os.environ.get("INSTANCE_NAME", "default")
 WHOAMI_BROKER_URL_MODE = os.environ.get("WHOAMI_BROKER_URL_MODE", "full").strip().lower()
+
+# --- Conversation/Memory Feature Config ---
+MEMORY_ENABLED = os.environ.get("MEMORY_ENABLED", "true").lower() in ("true", "1", "yes")
+MEMORY_DB_PATH = os.environ.get("MEMORY_DB_PATH", "discord_bot_memory.db")
+DEFAULT_PERSONA = os.environ.get("DEFAULT_PERSONA", "helpful_assistant")
+EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "none").lower()  # 'openai', 'local', 'none'
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
+CONVERSATION_TIMEOUT_MINUTES = float(os.environ.get("CONVERSATION_TIMEOUT_MINUTES", "30"))
 
 MAX_DISPLAY_LEN = 1500
 
@@ -219,6 +243,15 @@ async def on_ready():
     bot_id = str(client.user.id) if client.user else "?"
     print(f"[bot] logged in as {client.user} (id={bot_id})")
     print(f"[bot] INSTANCE_NAME={INSTANCE_NAME} BROKER_URL={BROKER_URL}")
+    
+    # Show conversation features status
+    if HAS_CONVERSATION_FEATURES:
+        print(f"[bot] Conversation features: available")
+        print(f"[bot]   Memory enabled: {MEMORY_ENABLED}")
+        print(f"[bot]   Default persona: {DEFAULT_PERSONA}")
+        print(f"[bot]   Embeddings: {EMBEDDING_PROVIDER}")
+    else:
+        print(f"[bot] Conversation features: not available (import error)")
 
 
 async def _run_job_and_reply(
@@ -482,25 +515,179 @@ async def on_message(message: discord.Message):
     if cmd == "whoami":
         bot_id = str(client.user.id) if client.user else "?"
         broker_display = whoami_broker_url_display(BROKER_URL, WHOAMI_BROKER_URL_MODE)
-        await message.reply(
+        lines = [
             format_whoami(INSTANCE_NAME, bot_id, broker_display, _allowlist_display())
-        )
+        ]
+        if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
+            lines.append(f"**Memory:** enabled ({EMBEDDING_PROVIDER} embeddings)")
+            lines.append(f"**Default persona:** {DEFAULT_PERSONA}")
+        await message.reply("\n".join(lines))
         return
 
-    await message.reply(
-        "Unknown command. Use: `ping <text>`, `capabilities`, `plan <text>`, `approve <plan_id>`, "
-        "`status <job_id>`, `repos`, `repostat <repo>`, `last <repo>`, `grep <repo> <query> [path]`, "
-        "`cat <repo> <path> [start] [end]`, `ask <prompt>`, `urgo <prompt>`, `whoami`"
-    )
+    # --- Conversational/Chat Commands ---
+    if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
+        if cmd == "chat":
+            if not payload:
+                await message.reply("Start a conversation! Usage: `chat <your message>`")
+                return
+            response = await handle_chat_command(bot_instance(), message, payload)
+            await message.reply(response)
+            return
+
+        if cmd == "persona":
+            response = await handle_persona_command(bot_instance(), message, payload)
+            await message.reply(response)
+            return
+
+        if cmd == "memory":
+            response = await handle_memory_command(bot_instance(), message, payload)
+            await message.reply(response)
+            return
+
+        if cmd == "remember":
+            if not payload:
+                await message.reply("What should I remember? Usage: `remember <fact>`")
+                return
+            response = await handle_remember_command(bot_instance(), message, payload)
+            await message.reply(response)
+            return
+
+        if cmd == "history":
+            response = await handle_history_command(bot_instance(), message, payload)
+            await message.reply(response)
+            return
+
+    # Build help message
+    help_lines = [
+        "Unknown command. Available commands:",
+        "",
+        "**Job Commands:**",
+        "`ping <text>` - Test connectivity",
+        "`capabilities` - Show worker capabilities",
+        "`plan <text>` - Create execution plan",
+        "`approve <plan_id>` - Approve a plan",
+        "`status <job_id>` - Check job status",
+        "",
+        "**Repository Commands:**",
+        "`repos` - List available repos",
+        "`repostat <repo>` - Get repo status",
+        "`last <repo>` - Show last commit",
+        "`grep <repo> <query> [path]` - Search repo",
+        "`cat <repo> <path> [start] [end]` - Read file",
+        "",
+        "**LLM Commands:**",
+        "`ask <prompt>` - Ask LLM (one-shot)",
+        "`urgo <prompt>` - Urgent LLM request",
+    ]
+
+    if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
+        help_lines.extend([
+            "",
+            "**Chat Commands:**",
+            "`chat <message>` - Conversational mode with memory",
+            "`persona [name]` - Switch personality",
+            "`memory [status/clear/on/off]` - Memory management",
+            "`remember <fact>` - Remember a fact",
+            "`history [n]` - Show conversation history",
+        ])
+
+    help_lines.extend([
+        "",
+        "**Info:**",
+        "`whoami` - Show bot info",
+    ])
+
+    await message.reply("\n".join(help_lines))
+
+
+# Global bot instance reference for chat commands
+_bot_instance = None
+
+def bot_instance():
+    """Get bot instance for chat commands."""
+    return _bot_instance
+
+
+def _init_conversation_features():
+    """Initialize memory and personality systems if enabled."""
+    if not HAS_CONVERSATION_FEATURES or not MEMORY_ENABLED:
+        return
+    
+    try:
+        # Initialize memory with embedding provider
+        embedding_provider = None
+        
+        if EMBEDDING_PROVIDER == "openai" and OPENAI_API_KEY:
+            try:
+                import openai
+                client = openai.AsyncOpenAI(api_key=OPENAI_API_KEY)
+                
+                async def openai_embed(text: str):
+                    try:
+                        response = await client.embeddings.create(
+                            model=EMBEDDING_MODEL,
+                            input=text[:8000]  # Token limit safety
+                        )
+                        import numpy as np
+                        return np.array(response.data[0].embedding, dtype=np.float32)
+                    except Exception as e:
+                        logger.error(f"OpenAI embedding failed: {e}")
+                        return None
+                
+                embedding_provider = openai_embed
+                print(f"[bot] OpenAI embeddings enabled ({EMBEDDING_MODEL})")
+            except ImportError:
+                print("[bot] Warning: openai package not installed, embeddings disabled")
+        
+        elif EMBEDDING_PROVIDER == "local":
+            # Try to use sentence-transformers or similar
+            try:
+                from sentence_transformers import SentenceTransformer
+                model = SentenceTransformer('all-MiniLM-L6-v2')
+                
+                import numpy as np
+                def local_embed(text: str):
+                    try:
+                        embedding = model.encode(text[:8000], convert_to_numpy=True)
+                        return np.array(embedding, dtype=np.float32)
+                    except Exception as e:
+                        logger.error(f"Local embedding failed: {e}")
+                        return None
+                
+                embedding_provider = local_embed
+                print("[bot] Local embeddings enabled (sentence-transformers)")
+            except ImportError:
+                print("[bot] Warning: sentence-transformers not installed, local embeddings disabled")
+                print("[bot] Install with: pip install sentence-transformers")
+        
+        # Initialize memory
+        memory = get_memory(MEMORY_DB_PATH, embedding_provider)
+        
+        # Initialize personality engine
+        personality = get_personality_engine(DEFAULT_PERSONA)
+        
+        print(f"[bot] Conversation features enabled (memory: {MEMORY_DB_PATH}, persona: {DEFAULT_PERSONA})")
+        
+    except Exception as e:
+        print(f"[bot] Warning: Failed to initialize conversation features: {e}")
 
 
 def main():
+    global _bot_instance
+    
     if not DISCORD_TOKEN or not BOT_TOKEN:
         print("[bot] ERROR: DISCORD_TOKEN and BOT_TOKEN must be set", file=sys.stderr)
         sys.exit(1)
     if not ALLOWLIST_IDS:
         print("[bot] ERROR: At least one of ALLOWED_USER_ID or ALLOWLIST_USER_ID must be set", file=sys.stderr)
         sys.exit(1)
+    
+    # Initialize conversation features
+    _init_conversation_features()
+    
+    # Store bot instance reference
+    _bot_instance = client
+    
     client.run(DISCORD_TOKEN)
 
 

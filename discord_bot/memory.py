@@ -28,6 +28,13 @@ except ImportError:
     HAS_NUMPY = False
     logger.warning("numpy not available, vector operations will be limited")
 
+# Import embeddings
+try:
+    from .embeddings import EmbeddingProvider, cosine_similarity
+    HAS_EMBEDDINGS = True
+except ImportError:
+    HAS_EMBEDDINGS = False
+
 
 @dataclass
 class Message:
@@ -73,8 +80,7 @@ class ConversationMemory:
         
         Args:
             db_path: Path to SQLite database
-            embedding_provider: Optional function to generate embeddings
-                              (e.g., lambda text: openai.embeddings.create(...))
+            embedding_provider: EmbeddingProvider instance or callable
         """
         self.db_path = db_path
         self.embedding_provider = embedding_provider
@@ -177,9 +183,26 @@ class ConversationMemory:
         """Generate embedding for text if provider is available."""
         if not self.embedding_provider:
             return None
-        
+
         try:
-            embedding = self.embedding_provider(text)
+            # Handle both EmbeddingProvider interface and callable
+            import asyncio
+            
+            if HAS_EMBEDDINGS and isinstance(self.embedding_provider, EmbeddingProvider):
+                # New EmbeddingProvider interface
+                if asyncio.iscoroutinefunction(self.embedding_provider.embed):
+                    # This needs to be called with asyncio.run() but we're in sync context
+                    # Return None for now - embeddings should be generated async
+                    return None
+                else:
+                    embedding = self.embedding_provider.embed_sync(text)
+            else:
+                # Legacy callable interface
+                embedding = self.embedding_provider(text)
+            
+            if embedding is None:
+                return None
+            
             if HAS_NUMPY and isinstance(embedding, np.ndarray):
                 return embedding.tobytes()
             elif isinstance(embedding, (list, tuple)):
@@ -191,17 +214,27 @@ class ConversationMemory:
     
     def _cosine_similarity(self, embedding1: bytes, embedding2: bytes) -> float:
         """Calculate cosine similarity between two embeddings."""
+        # Use imported cosine_similarity if available
+        if HAS_EMBEDDINGS and HAS_NUMPY:
+            try:
+                vec1 = np.frombuffer(embedding1, dtype=np.float32)
+                vec2 = np.frombuffer(embedding2, dtype=np.float32)
+                return cosine_similarity(vec1.tolist(), vec2.tolist())
+            except Exception as e:
+                logger.error(f"Failed to calculate similarity: {e}")
+                return 0.0
+        
         if not HAS_NUMPY:
             return 0.5  # Neutral similarity if numpy unavailable
-        
+
         try:
             vec1 = np.frombuffer(embedding1, dtype=np.float32)
             vec2 = np.frombuffer(embedding2, dtype=np.float32)
-            
+
             # Normalize
             vec1 = vec1 / np.linalg.norm(vec1)
             vec2 = vec2 / np.linalg.norm(vec2)
-            
+
             return float(np.dot(vec1, vec2))
         except Exception as e:
             logger.error(f"Failed to calculate similarity: {e}")

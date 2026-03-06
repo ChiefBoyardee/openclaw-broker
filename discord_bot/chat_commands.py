@@ -9,19 +9,12 @@ This module provides:
 """
 
 import json
+import os
 import time
 import asyncio
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 from dataclasses import dataclass
 import logging
-
-# Discord imports (using placeholder - actual imports in bot.py)
-try:
-    import discord
-    from discord.ext import commands
-    HAS_DISCORD = True
-except ImportError:
-    HAS_DISCORD = False
 
 # Import our modules
 from .memory import get_memory, ConversationMemory
@@ -50,7 +43,8 @@ class ChatManager:
     a cohesive conversational experience.
     """
     
-    def __init__(self, bot_instance, broker_url: str, bot_token: str):
+    def __init__(self, bot_instance, broker_url: str, bot_token: str,
+                 run_job_func: Optional[Callable] = None):
         """
         Initialize chat manager.
         
@@ -58,10 +52,12 @@ class ChatManager:
             bot_instance: The Discord bot instance
             broker_url: URL of the OpenClaw broker
             bot_token: Bot token for broker authentication
+            run_job_func: Function to run jobs (e.g., _run_job_and_reply)
         """
         self.bot = bot_instance
         self.broker_url = broker_url
         self.bot_token = bot_token
+        self.run_job_func = run_job_func
         
         # Initialize subsystems
         self.memory = get_memory()
@@ -235,7 +231,9 @@ class ChatManager:
         # Send to broker for processing (through existing job system)
         # This uses the llm_task mechanism but with conversation context
         try:
-            response = await self._send_to_llm(messages, voice_settings, session)
+            # Note: reply_func is not used here as we return the response
+            # The actual Discord reply happens in the caller
+            response = await self._send_to_llm(messages, voice_settings, session, None)
             
             # Validate persona adherence
             adherence_score = self.personality.validate_persona_adherence(response, persona)
@@ -266,31 +264,94 @@ class ChatManager:
             return f"I'm having trouble thinking right now... Error: {str(e)[:100]}"
     
     async def _send_to_llm(self, messages: list, voice_settings: dict,
-                          session: ChatSession) -> str:
+                          session: ChatSession, message_obj) -> str:
         """
-        Send conversation to LLM via broker.
+        Send conversation to LLM via broker using the bot's job system.
         
-        This creates a job that the runner processes with full context.
+        This creates an llm_task job that the runner processes with full context.
         """
-        # Create payload
-        payload = {
-            "prompt": messages[-1]["content"],  # Current message
-            "conversation_context": {
-                "messages": messages[:-1],  # Previous context
-                "persona": session.persona_key,
-            },
-            "voice_settings": voice_settings,
-            "max_steps": 1  # No tool loop for pure chat
+        import json
+        import requests
+        import os
+        import time
+        
+        # Get broker config from environment or bot instance
+        broker_url = getattr(self.bot, 'broker_url', self.broker_url)
+        bot_token = getattr(self.bot, 'bot_token', self.bot_token)
+        
+        # Create payload with conversation context
+        current_prompt = messages[-1]["content"] if messages else ""
+        context_messages = messages[:-1] if len(messages) > 1 else []
+        
+        # Build the payload for llm_task
+        payload_obj = {
+            "prompt": current_prompt,
+            "conversation_history": [
+                {"role": m["role"], "content": m["content"]} 
+                for m in context_messages
+            ],
+            "persona": session.persona_key,
+            "temperature": voice_settings.get("temperature", 0.7),
+            "max_tokens": voice_settings.get("max_tokens", 2000),
         }
         
-        # Create job via broker
-        # This would call the existing broker API
-        # For now, return a placeholder - actual implementation would integrate
-        # with the existing bot.py _run_job_and_reply mechanism
+        payload_json = json.dumps(payload_obj)
         
-        # Placeholder response for demonstration
-        await asyncio.sleep(0.5)  # Simulate processing
-        return f"[This would be the LLM response via broker with conversation context]"
+        # Call broker directly
+        try:
+            # Create job
+            r = requests.post(
+                f"{broker_url}/jobs",
+                headers={"X-Bot-Token": bot_token},
+                json={"command": "llm_task", "payload": payload_json},
+                timeout=(5, 15),
+            )
+            r.raise_for_status()
+            job = r.json()
+            job_id = job.get("id")
+            
+            if not job_id:
+                return "[Error: Failed to create conversation job]"
+            
+            # Poll for result
+            deadline = time.monotonic() + 120  # 2 minute timeout
+            sleep_sec = 0.5
+            
+            while time.monotonic() < deadline:
+                r = requests.get(
+                    f"{broker_url}/jobs/{job_id}",
+                    headers={"X-Bot-Token": bot_token},
+                    timeout=(5, 15),
+                )
+                r.raise_for_status()
+                job = r.json()
+                
+                status = job.get("status", "")
+                if status == "done":
+                    result = job.get("result", "(no result)")
+                    try:
+                        parsed = json.loads(result)
+                        if isinstance(parsed, dict):
+                            return parsed.get("final", result)
+                    except json.JSONDecodeError:
+                        pass
+                    return result
+                    
+                if status == "failed":
+                    err = job.get("error") or job.get("result") or "unknown"
+                    return f"[Error: {err}]"
+                
+                time.sleep(sleep_sec)
+                sleep_sec = min(sleep_sec * 2, 2.0)
+            
+            return f"[Still processing... Check status with: status {job_id}]"
+            
+        except requests.RequestException as e:
+            logger.error(f"Broker request failed: {e}")
+            return f"[Broker connection error: {str(e)[:100]}]"
+        except Exception as e:
+            logger.error(f"Error in _send_to_llm: {e}")
+            return f"[Error generating response: {str(e)[:100]}]"
     
     async def handle_persona_command(self, user_id: str, 
                                      requested_persona: Optional[str] = None) -> str:
@@ -423,6 +484,21 @@ class ChatManager:
             logger.info(f"Cleaned up {len(expired)} expired sessions")
 
 
+# Global chat manager instance
+_chat_manager_instance = None
+
+def get_chat_manager(bot, broker_url: str, bot_token: str) -> ChatManager:
+    """Get or create global chat manager instance."""
+    global _chat_manager_instance
+    if _chat_manager_instance is None:
+        _chat_manager_instance = ChatManager(
+            bot_instance=bot,
+            broker_url=broker_url,
+            bot_token=bot_token
+        )
+    return _chat_manager_instance
+
+
 # Command handlers for bot.py integration
 
 async def handle_chat_command(bot, message, args: str):
@@ -434,18 +510,17 @@ async def handle_chat_command(bot, message, args: str):
     if not args:
         return "Start a conversation with me! Usage: `chat <your message>`"
     
-    # Initialize chat manager if needed
-    if not hasattr(bot, '_chat_manager'):
-        bot._chat_manager = ChatManager(
-            bot_instance=bot,
-            broker_url=bot.broker_url,
-            bot_token=bot.bot_token
-        )
+    # Get broker URL and token from bot
+    broker_url = getattr(bot, 'broker_url', os.environ.get("BROKER_URL", "http://127.0.0.1:8000"))
+    bot_token = getattr(bot, 'bot_token', os.environ.get("BOT_TOKEN", ""))
+    
+    # Get chat manager
+    manager = get_chat_manager(bot, broker_url, bot_token)
     
     async def reply_func(text):
         await message.channel.send(text)
     
-    response = await bot._chat_manager.handle_chat_message(
+    response = await manager.handle_chat_message(
         message_content=args,
         user_id=str(message.author.id),
         channel_id=str(message.channel.id),
@@ -462,15 +537,13 @@ async def handle_persona_command(bot, message, args: str):
     
     Usage: persona [name]
     """
-    if not hasattr(bot, '_chat_manager'):
-        bot._chat_manager = ChatManager(
-            bot_instance=bot,
-            broker_url=bot.broker_url,
-            bot_token=bot.bot_token
-        )
+    broker_url = getattr(bot, 'broker_url', os.environ.get("BROKER_URL", "http://127.0.0.1:8000"))
+    bot_token = getattr(bot, 'bot_token', os.environ.get("BOT_TOKEN", ""))
+    
+    manager = get_chat_manager(bot, broker_url, bot_token)
     
     requested = args.strip() if args else None
-    response = await bot._chat_manager.handle_persona_command(
+    response = await manager.handle_persona_command(
         str(message.author.id),
         requested
     )
@@ -483,17 +556,15 @@ async def handle_memory_command(bot, message, args: str):
     
     Usage: memory [status|clear|on|off]
     """
-    if not hasattr(bot, '_chat_manager'):
-        bot._chat_manager = ChatManager(
-            bot_instance=bot,
-            broker_url=bot.broker_url,
-            bot_token=bot.bot_token
-        )
+    broker_url = getattr(bot, 'broker_url', os.environ.get("BROKER_URL", "http://127.0.0.1:8000"))
+    bot_token = getattr(bot, 'bot_token', os.environ.get("BOT_TOKEN", ""))
+    
+    manager = get_chat_manager(bot, broker_url, bot_token)
     
     parts = args.strip().split() if args else []
     subcommand = parts[0] if parts else None
     
-    response = await bot._chat_manager.handle_memory_command(
+    response = await manager.handle_memory_command(
         str(message.author.id),
         subcommand,
         " ".join(parts[1:]) if len(parts) > 1 else ""
@@ -507,14 +578,12 @@ async def handle_remember_command(bot, message, args: str):
     
     Usage: remember <something>
     """
-    if not hasattr(bot, '_chat_manager'):
-        bot._chat_manager = ChatManager(
-            bot_instance=bot,
-            broker_url=bot.broker_url,
-            bot_token=bot.bot_token
-        )
+    broker_url = getattr(bot, 'broker_url', os.environ.get("BROKER_URL", "http://127.0.0.1:8000"))
+    bot_token = getattr(bot, 'bot_token', os.environ.get("BOT_TOKEN", ""))
     
-    response = await bot._chat_manager.handle_remember_command(
+    manager = get_chat_manager(bot, broker_url, bot_token)
+    
+    response = await manager.handle_remember_command(
         str(message.author.id),
         args
     )
@@ -527,16 +596,14 @@ async def handle_history_command(bot, message, args: str):
     
     Usage: history [count]
     """
-    if not hasattr(bot, '_chat_manager'):
-        bot._chat_manager = ChatManager(
-            bot_instance=bot,
-            broker_url=bot.broker_url,
-            bot_token=bot.bot_token
-        )
+    broker_url = getattr(bot, 'broker_url', os.environ.get("BROKER_URL", "http://127.0.0.1:8000"))
+    bot_token = getattr(bot, 'bot_token', os.environ.get("BOT_TOKEN", ""))
+    
+    manager = get_chat_manager(bot, broker_url, bot_token)
     
     limit = int(args.strip()) if args and args.strip().isdigit() else 10
     
-    response = await bot._chat_manager.handle_history_command(
+    response = await manager.handle_history_command(
         str(message.author.id),
         str(message.channel.id),
         limit=limit
