@@ -1,0 +1,56 @@
+# llama-cpp-python OpenAI-compatible server
+# Template: deploy/systemd/llama-cpp-server.service.template
+#
+# This service runs the llama.cpp server as a background daemon.
+# It provides an OpenAI-compatible API for the OpenClaw runner.
+#
+# Installation:
+#   1. Run: ./deploy/scripts/setup_llama_cpp.sh --systemd
+#   2. Or manually copy this file and update paths:
+#      sudo cp deploy/systemd/llama-cpp-server.service.template /etc/systemd/system/llama-cpp-server.service
+#      sudo sed -i 's|LLAMA_CPP_DIR_PLACEHOLDER|/opt/llama-cpp-server|g' /etc/systemd/system/llama-cpp-server.service
+#      sudo sed -i 's|MODELS_DIR_PLACEHOLDER|/opt/models|g' /etc/systemd/system/llama-cpp-server.service
+#
+# Usage:
+#   sudo systemctl start llama-cpp-server    # Start the server
+#   sudo systemctl enable llama-cpp-server   # Enable on boot
+#   sudo systemctl status llama-cpp-server   # Check status
+#   sudo journalctl -u llama-cpp-server -f     # View logs
+
+[Unit]
+Description=llama.cpp OpenAI-compatible server for OpenClaw
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=LLAMA_CPP_DIR_PLACEHOLDER/server.env
+WorkingDirectory=LLAMA_CPP_DIR_PLACEHOLDER
+
+# Build the command dynamically based on environment variables
+# Requires bash for the wrapper script
+ExecStart=LLAMA_CPP_DIR_PLACEHOLDER/start-server.sh
+
+# Alternative: direct command (uncomment if you prefer)
+# ExecStart=LLAMA_CPP_DIR_PLACEHOLDER/venv/bin/python -m llama_cpp.server \
+#   --model MODELS_DIR_PLACEHOLDER/${LLAMA_MODEL} \
+#   --host 127.0.0.1 \
+#   --port ${LLAMA_PORT:-8000} \
+#   --n_ctx ${LLAMA_N_CTX:-8192} \
+#   --n_gpu_layers ${LLAMA_N_GPU_LAYERS:-35} \
+#   --chat_format chatml
+
+Restart=on-failure
+RestartSec=10
+
+# Resource limits (optional - adjust based on your system)
+# LimitAS=16G
+# LimitNOFILE=65536
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=llama-cpp-server
+
+[Install]
+WantedBy=multi-user.target

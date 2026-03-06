@@ -25,12 +25,55 @@ From the repo root on the VPS. If a script is not executable (e.g. after a Windo
 
 For **multi-worker LLM smoke** (WSL vLLM + Jetson Orin), caps, routing, and full steps: see [docs/MULTI_WORKER_LLM_SMOKE.md](../../docs/MULTI_WORKER_LLM_SMOKE.md). Use [runner-wsl.env.example](runner-wsl.env.example) and [runner-jetson.env.example](runner-jetson.env.example) for each worker.
 
+## LLM Backend Options
+
+The runner supports multiple LLM backends via the OpenAI-compatible API:
+
+| Backend | Example File | Use Case |
+|---------|--------------|----------|
+| **vLLM** | [runner-wsl.env.example](runner-wsl.env.example) | High throughput, multi-user, HuggingFace models |
+| **llama.cpp** | [runner-llamacpp.env.example](runner-llamacpp.env.example) | GGUF models, lower VRAM, CPU support, simpler setup |
+
+### llama.cpp (GGUF) Setup
+
+For running GGUF models with llama.cpp on WSL:
+
+1. **Quick Install**: Run the automated setup script:
+   ```bash
+   ./deploy/install_wsl_llamacpp.sh
+   ```
+
+2. **Or Manual Setup**:
+   ```bash
+   # Install llama.cpp server and download a model
+   ./deploy/scripts/setup_llama_cpp.sh
+
+   # Copy the llama.cpp runner config
+   cp deploy/env.examples/runner-llamacpp.env.example runner/runner.env
+
+   # Edit runner.env with your BROKER_URL and WORKER_TOKEN
+   $EDITOR runner/runner.env
+
+   # Start the server
+   /opt/llama-cpp-server/start-server.sh
+
+   # Start the runner
+   runner/start.sh
+   ```
+
+3. **Discord routing**: Use `ask llamacpp:` or `ask llamacpp ` to target this worker.
+
+See the llama.cpp setup script for model download options, GPU layer configuration, and systemd service installation.
+
 ## Layout
 
 | Component | Env file | Where it lives |
 |-----------|----------|----------------|
 | **Broker** | [broker.env.example](broker.env.example) | VPS: `/opt/openclaw-broker/broker.env` (or path used by systemd) |
 | **Runner** | [runner.env.example](runner.env.example) | WSL/worker: e.g. `runner/runner.env` or `/opt/openclaw-runner/runner.env` |
+| **Runner (WSL + vLLM)** | [runner-wsl.env.example](runner-wsl.env.example) | WSL with vLLM backend |
+| **Runner (WSL + llama.cpp)** | [runner-llamacpp.env.example](runner-llamacpp.env.example) | WSL with llama.cpp GGUF backend |
+| **Runner (Jetson)** | [runner-jetson.env.example](runner-jetson.env.example) | Jetson Orin with local LLM |
 | **Discord bot** | [bot.env.example](bot.env.example) | VPS per instance: `/opt/openclaw-bot-<instance>/bot.env` |
 
 ## Our environment (VPS + WSL)
