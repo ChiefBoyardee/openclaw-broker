@@ -11,6 +11,7 @@
 #   - Broker must be set up first (run ./deploy/onboard_broker.sh on your VPS)
 #   - WSL with Python 3.8+ and internet access
 #   - Git repo cloned locally
+#   - For --build-from-source: git, cmake, and C++ compiler installed
 #
 # Usage:
 #   # Interactive mode (prompts for broker URL, tokens, etc.)
@@ -24,6 +25,9 @@
 #
 #   # User-mode install (no sudo, installs to ~/.local)
 #   ./deploy/install_wsl_llamacpp.sh --user
+#
+#   # Build from source for Qwen3.5 model support
+#   ./deploy/install_wsl_llamacpp.sh --build-from-source
 #
 # Environment Variables:
 #   BROKER_URL        - Broker URL (e.g., http://100.x.x.x:8443)
@@ -55,6 +59,7 @@ NC='\033[0m' # No Color
 INSTALL_MODE="${INSTALL_MODE:-system}"
 AUTO_MODE=false
 WITH_SYSTEMD=false
+WITH_BUILDFROM_SOURCE=false
 
 # Print colored output
 info() { echo -e "${BLUE}[INFO]${NC} $1"; }
@@ -71,10 +76,11 @@ USAGE:
     $SCRIPT_NAME [OPTIONS]
 
 OPTIONS:
-    --auto          Fully automated mode (requires env vars set)
-    --user          User-mode install (no sudo, ~/.local)
-    --systemd       Install and enable systemd services
-    --help          Show this help message
+    --auto               Fully automated mode (requires env vars set)
+    --user               User-mode install (no sudo, ~/.local)
+    --systemd            Install and enable systemd services
+    --build-from-source  Build llama-cpp-python from source (required for Qwen3.5)
+    --help               Show this help message
 
 ENVIRONMENT VARIABLES (for --auto mode):
     BROKER_URL          Broker URL (required)
@@ -82,6 +88,7 @@ ENVIRONMENT VARIABLES (for --auto mode):
     MODEL_PATH          Path to existing GGUF model (optional)
     LLAMA_N_GPU_LAYERS  GPU layers (default: 35, 0 for CPU)
     WORKER_ID           Worker identifier (default: hostname-llamacpp)
+    CMAKE_ARGS          Build flags for source build (e.g., "-DGGML_CUDA=ON" for CUDA)
 
 EXAMPLES:
     # Interactive installation
@@ -95,6 +102,9 @@ EXAMPLES:
 
     # System install with systemd services
     ./deploy/install_wsl_llamacpp.sh --systemd
+
+    # Build from source for Qwen3.5 model support
+    CMAKE_ARGS="-DGGML_CUDA=ON" ./deploy/install_wsl_llamacpp.sh --build-from-source
 
 PREREQUISITES:
     - WSL with Python 3.8+ installed
@@ -135,6 +145,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --systemd)
       WITH_SYSTEMD=true
+      shift
+      ;;
+    --build-from-source)
+      WITH_BUILDFROM_SOURCE=true
       shift
       ;;
     --help|-h)
@@ -282,6 +296,10 @@ install_llama_cpp() {
   fi
   if [[ "$WITH_SYSTEMD" == true && "$INSTALL_MODE" == "system" ]]; then
     setup_args="$setup_args --systemd"
+  fi
+  if [[ "$WITH_BUILDFROM_SOURCE" == true ]]; then
+    setup_args="$setup_args --build-from-source"
+    info "Building llama-cpp-python from source for latest model support (Qwen3.5+)"
   fi
   
   if [[ -n "$MODEL_PATH" ]]; then

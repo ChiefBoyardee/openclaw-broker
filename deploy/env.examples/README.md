@@ -66,6 +66,35 @@ For running GGUF models with llama.cpp on WSL:
 
 3. **Discord routing**: Use `ask llamacpp:` or `ask llamacpp ` to target this worker.
 
+### Qwen3.5 and New Model Support
+
+The pip-released version of llama-cpp-python (0.3.16) does not yet include support for the Qwen3.5 model architecture (`qwen35`). This architecture was added to llama.cpp in February 2026, after the last pip release.
+
+**To use Qwen3.5 models, you must build from source:**
+
+```bash
+# Build llama-cpp-python from source with latest llama.cpp
+./deploy/install_wsl_llamacpp.sh --build-from-source
+
+# Or for manual setup with CUDA support:
+CMAKE_ARGS="-DGGML_CUDA=ON" ./deploy/scripts/setup_llama_cpp.sh --build-from-source
+```
+
+**What this does:**
+- Clones the llama-cpp-python repository
+- Updates the llama.cpp submodule to the latest commit (includes qwen35)
+- Builds and installs from source
+
+**Auto-updates for source builds:**
+The `auto_update.sh` script can update source-built installations:
+```bash
+./deploy/scripts/auto_update.sh llama-cpp
+```
+
+This will fetch the latest llama.cpp changes and rebuild automatically.
+
+**Note:** Building from source requires `git`, `cmake`, and a C++ compiler. The build may take 5-10 minutes depending on your system.
+
 See the llama.cpp setup script for model download options, GPU layer configuration, and systemd service installation.
 
 ## Layout

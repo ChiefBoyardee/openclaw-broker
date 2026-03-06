@@ -309,16 +309,50 @@ update_llama_cpp() {
   fi
   
   local llama_dir="/opt/llama-cpp-server"
-  if [[ ! -d "$llama_dir" ]]; then
-    log "llama.cpp server not installed at $llama_dir"
+  local user_llama_dir="$HOME/.local/llama-cpp-server"
+  
+  # Check both system and user install locations
+  if [[ -d "$llama_dir" ]]; then
+    log "Found system install at $llama_dir"
+  elif [[ -d "$user_llama_dir" ]]; then
+    llama_dir="$user_llama_dir"
+    log "Found user install at $llama_dir"
+  else
+    log "llama.cpp server not installed"
     return 1
+  fi
+  
+  # Check if this was a source build
+  local install_type="pip"
+  if [[ -f "$llama_dir/install_type.txt" ]]; then
+    install_type=$(cat "$llama_dir/install_type.txt")
   fi
   
   # Update llama-cpp-python
   if [[ -d "$llama_dir/venv" ]]; then
-    log "Updating llama-cpp-python..."
-    "$llama_dir/venv/bin/pip" install --upgrade llama-cpp-python[server] -q
-    log "llama-cpp-python updated"
+    if [[ "$install_type" == "source" && -d "$llama_dir/src/llama-cpp-python" ]]; then
+      log "Updating source-built llama-cpp-python..."
+      cd "$llama_dir/src/llama-cpp-python"
+      
+      # Fetch latest and update submodule
+      log "Fetching latest llama-cpp-python..."
+      git fetch origin
+      git checkout main 2>/dev/null || git checkout master 2>/dev/null || true
+      git pull
+      
+      log "Updating llama.cpp submodule to latest..."
+      git submodule update --remote vendor/llama.cpp
+      
+      # Rebuild
+      log "Rebuilding from source..."
+      export FORCE_CMAKE=1
+      "$llama_dir/venv/bin/pip" install . --upgrade --force-reinstall --no-cache-dir -q
+      log "llama-cpp-python updated from source"
+    else
+      log "Updating llama-cpp-python from pip..."
+      "$llama_dir/venv/bin/pip" install --upgrade llama-cpp-python[server] -q
+      log "llama-cpp-python updated from pip"
+    fi
   fi
   
   # Restart service if running

@@ -5,16 +5,24 @@
 #
 # Usage:
 #   ./deploy/scripts/setup_llama_cpp.sh              # Interactive setup
+#   ./deploy/scripts/setup_llama_cpp.sh --build-from-source  # Build latest llama.cpp from source (for new model support)
 #   MODEL_PATH=/path/to/mymodel.gguf ./deploy/scripts/setup_llama_cpp.sh  # Use existing model
 #
 # The script creates:
 #   - /opt/llama-cpp-server/venv  (virtual environment)
 #   - /opt/models/                (model storage directory; or ~/.local/share/openclaw-models in --user mode)
 #   - systemd service (if --systemd flag provided)
+#
+# Note: --build-from-source is required for Qwen3.5 models as pip releases lag
+# behind llama.cpp. See: https://github.com/abetlen/llama-cpp-python/issues/2008
 
 set -e
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
+
+# Build configuration
+BUILD_FROM_SOURCE=false
+WITH_SYSTEMD=false
 
 # Configuration
 LLAMA_CPP_DIR="${LLAMA_CPP_DIR:-/opt/llama-cpp-server}"
@@ -36,9 +44,71 @@ echo "[setup_llama_cpp] OpenClaw llama.cpp Server Setup"
 echo "[setup_llama_cpp] ============================================"
 echo ""
 
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --user)
+      INSTALL_MODE="user"
+      shift
+      ;;
+    --systemd)
+      WITH_SYSTEMD=true
+      shift
+      ;;
+    --build-from-source)
+      BUILD_FROM_SOURCE=true
+      shift
+      ;;
+    --help|-h)
+      cat << 'EOF'
+Usage: setup_llama_cpp.sh [OPTIONS]
+
+Setup llama-cpp-python server for OpenClaw runner.
+
+OPTIONS:
+    --user                User-mode install (no sudo, installs to ~/.local)
+    --systemd             Install systemd service (system mode only)
+    --build-from-source   Build llama-cpp-python from source with latest llama.cpp
+                          Required for Qwen3.5 models and other new architectures
+    --help                Show this help message
+
+ENVIRONMENT VARIABLES:
+    MODEL_PATH            Path to existing GGUF model to use
+    N_GPU_LAYERS          GPU layers to offload (default: 35, 0 for CPU)
+    N_CTX                 Context size in tokens (default: 8192)
+    SERVER_PORT           Server port (default: 8000)
+
+EXAMPLES:
+    # Standard pip install (may not support latest models)
+    ./deploy/scripts/setup_llama_cpp.sh
+
+    # Build from source for Qwen3.5 support
+    ./deploy/scripts/setup_llama_cpp.sh --build-from-source
+
+    # User-mode with source build
+    ./deploy/scripts/setup_llama_cpp.sh --user --build-from-source
+
+    # Use existing model
+    MODEL_PATH=/path/to/model.gguf ./deploy/scripts/setup_llama_cpp.sh
+
+Note: --build-from-source requires git and build tools (cmake, C++ compiler).
+For CUDA support, set: export CMAKE_ARGS="-DGGML_CUDA=ON"
+EOF
+      exit 0
+      ;;
+    -*)
+      echo "Unknown option: $1" >&2
+      echo "Use --help for usage information" >&2
+      exit 1
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
 # Check if running as root for system-wide install
-if [[ "$1" == "--user" ]]; then
-  INSTALL_MODE="user"
+if [[ "$INSTALL_MODE" == "user" ]]; then
   LLAMA_CPP_DIR="${HOME}/.local/llama-cpp-server"
   MODELS_DIR="${HOME}/.local/share/openclaw-models"
   LLAMA_LOG_DIR="${HOME}/.local/state/llama-cpp-server"
@@ -64,7 +134,65 @@ fi
 # Install llama-cpp-python with server support
 echo "[setup_llama_cpp] Installing llama-cpp-python[server]..."
 "$LLAMA_CPP_DIR/$VENV_NAME/bin/pip" install --upgrade pip
-"$LLAMA_CPP_DIR/$VENV_NAME/bin/pip" install llama-cpp-python[server]
+
+if [[ "$BUILD_FROM_SOURCE" == true ]]; then
+  echo "[setup_llama_cpp] Building llama-cpp-python from source with latest llama.cpp..."
+  echo "[setup_llama_cpp] This is required for Qwen3.5 and other new model architectures."
+  echo "[setup_llama_cpp] Note: This requires git, cmake, and a C++ compiler."
+  
+  # Check for required tools
+  if ! command -v git &> /dev/null; then
+    echo "[setup_llama_cpp] ERROR: git is required for --build-from-source but not found." >&2
+    exit 1
+  fi
+  
+  # Create source directory
+  SOURCE_DIR="$LLAMA_CPP_DIR/src"
+  mkdir -p "$SOURCE_DIR"
+  
+  # Clone or update the repository
+  if [[ -d "$SOURCE_DIR/llama-cpp-python/.git" ]]; then
+    echo "[setup_llama_cpp] Updating existing llama-cpp-python source..."
+    cd "$SOURCE_DIR/llama-cpp-python"
+    git fetch origin
+    git checkout main || git checkout master
+    git pull
+    git submodule update --remote vendor/llama.cpp
+  else
+    echo "[setup_llama_cpp] Cloning llama-cpp-python repository..."
+    rm -rf "$SOURCE_DIR/llama-cpp-python"
+    git clone --recursive https://github.com/abetlen/llama-cpp-python.git "$SOURCE_DIR/llama-cpp-python"
+    cd "$SOURCE_DIR/llama-cpp-python"
+    # Update to latest llama.cpp (this gets qwen35 support)
+    git submodule update --remote vendor/llama.cpp
+  fi
+  
+  # Build and install
+  echo "[setup_llama_cpp] Building llama-cpp-python from source..."
+  cd "$SOURCE_DIR/llama-cpp-python"
+  
+  # Set build environment
+  export FORCE_CMAKE=1
+  # Allow user to set CMAKE_ARGS for CUDA, etc.
+  if [[ -n "$CMAKE_ARGS" ]]; then
+    echo "[setup_llama_cpp] Using CMAKE_ARGS: $CMAKE_ARGS"
+  fi
+  
+  # Install the package
+  "$LLAMA_CPP_DIR/$VENV_NAME/bin/pip" install . --upgrade --force-reinstall --no-cache-dir || {
+    echo "[setup_llama_cpp] ERROR: Failed to build from source. Falling back to pip install..." >&2
+    "$LLAMA_CPP_DIR/$VENV_NAME/bin/pip" install llama-cpp-python[server]
+  }
+  
+  # Record that we built from source
+  echo "source" > "$LLAMA_CPP_DIR/install_type.txt"
+  echo "[setup_llama_cpp] Source build complete!"
+else
+  echo "[setup_llama_cpp] Installing llama-cpp-python[server] from pip..."
+  echo "[setup_llama_cpp] Note: Use --build-from-source for Qwen3.5 model support."
+  "$LLAMA_CPP_DIR/$VENV_NAME/bin/pip" install llama-cpp-python[server]
+  echo "pip" > "$LLAMA_CPP_DIR/install_type.txt"
+fi
 
 # Install huggingface-hub for model downloads
 "$LLAMA_CPP_DIR/$VENV_NAME/bin/pip" install huggingface-hub
@@ -276,7 +404,7 @@ SCRIPT
 chmod +x "$LLAMA_CPP_DIR/test-server.sh"
 
 # Install systemd service if requested and in system mode
-if [[ "$1" == "--systemd" && "$INSTALL_MODE" == "system" ]]; then
+if [[ "$WITH_SYSTEMD" == true && "$INSTALL_MODE" == "system" ]]; then
   echo "[setup_llama_cpp] Installing systemd service..."
   
   if [[ -d /etc/systemd/system ]]; then
