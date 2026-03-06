@@ -8,17 +8,15 @@ This module provides:
 - remember/forget: Explicit memory control
 """
 
-import json
 import os
 import time
-import asyncio
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Callable
 from dataclasses import dataclass
 import logging
 
 # Import our modules
-from .memory import get_memory, ConversationMemory
-from .personality import get_personality_engine, PersonalityEngine, PersonaConfig
+from .memory import get_memory
+from .personality import get_personality_engine
 
 logger = logging.getLogger(__name__)
 
@@ -152,7 +150,6 @@ class ChatManager:
         
         # If persona was requested, update session
         if requested_persona:
-            old_persona = session.persona_key
             session.persona_key = requested_persona
             self.personality.set_user_persona(user_id, requested_persona)
             
@@ -272,7 +269,6 @@ class ChatManager:
         """
         import json
         import requests
-        import os
         import time
         
         # Get broker config from environment or bot instance

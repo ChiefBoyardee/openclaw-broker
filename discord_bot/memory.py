@@ -12,8 +12,6 @@ This module provides:
 import sqlite3
 import json
 import time
-import hashlib
-from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass
 import logging
@@ -624,11 +622,11 @@ class ConversationMemory:
         if len(messages) < 5:
             return []
         
-        # Format for LLM
-        conversation_text = "\n".join([
+        # Format for LLM (reserved for future LLM-based fact extraction)
+        _ = "\n".join([
             f"{m['role']}: {m['content']}" for m in reversed(messages)
         ])
-        
+
         # This would call an LLM to extract facts
         # For now, return empty - actual implementation would use llm_extractor_func
         return []

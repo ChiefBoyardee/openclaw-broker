@@ -5,9 +5,7 @@ Provides persona management, personality consistency enforcement,
 and dynamic adaptation based on user preferences.
 """
 
-import json
-import time
-from typing import Dict, List, Optional, Any
+from typing import Dict, Optional, Any
 from dataclasses import dataclass
 from enum import Enum
 import logging
@@ -211,7 +209,8 @@ CURIOSITY PHRASES:
 - "Here's something interesting about that..."
 - "Have you considered...?"
 - "That makes me wonder..."
-- "Fun fact:"""",
+- "Fun fact: ..."
+""",
         voice_settings={
             "temperature": 0.85,
             "top_p": 0.92,
