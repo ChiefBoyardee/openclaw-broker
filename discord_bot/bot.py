@@ -6,6 +6,7 @@ Guardrails: cooldown, max concurrent.
 """
 
 import json
+import logging
 import os
 import re
 import sys
@@ -17,6 +18,8 @@ import discord
 import requests
 
 from discord_bot.redaction import redact_for_display as _redact_for_display
+
+logger = logging.getLogger(__name__)
 
 # Import conversational features (optional - graceful degradation if not available)
 try:
@@ -246,12 +249,12 @@ async def on_ready():
     
     # Show conversation features status
     if HAS_CONVERSATION_FEATURES:
-        print(f"[bot] Conversation features: available")
+        print("[bot] Conversation features: available")
         print(f"[bot]   Memory enabled: {MEMORY_ENABLED}")
         print(f"[bot]   Default persona: {DEFAULT_PERSONA}")
         print(f"[bot]   Embeddings: {EMBEDDING_PROVIDER}")
     else:
-        print(f"[bot] Conversation features: not available (import error)")
+        print("[bot] Conversation features: not available (import error)")
 
 
 async def _run_job_and_reply(
@@ -660,12 +663,10 @@ def _init_conversation_features():
                 print("[bot] Warning: sentence-transformers not installed, local embeddings disabled")
                 print("[bot] Install with: pip install sentence-transformers")
         
-        # Initialize memory
-        memory = get_memory(MEMORY_DB_PATH, embedding_provider)
-        
-        # Initialize personality engine
-        personality = get_personality_engine(DEFAULT_PERSONA)
-        
+        # Initialize memory and personality (used by chat_commands when handling chat)
+        get_memory(MEMORY_DB_PATH, embedding_provider)
+        get_personality_engine(DEFAULT_PERSONA)
+
         print(f"[bot] Conversation features enabled (memory: {MEMORY_DB_PATH}, persona: {DEFAULT_PERSONA})")
         
     except Exception as e:

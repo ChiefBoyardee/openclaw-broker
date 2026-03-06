@@ -9,7 +9,7 @@ Supports:
 
 import os
 import logging
-from typing import Optional, Callable, List
+from typing import Optional, List
 from abc import ABC, abstractmethod
 
 logger = logging.getLogger(__name__)
@@ -155,14 +155,12 @@ class LocalEmbeddingProvider(EmbeddingProvider):
             return None
         
         try:
-            import numpy as np
-            
             # Truncate if needed
             truncated = text[:10000]
-            
+
             # Generate embedding
             embedding = self._model.encode(truncated, convert_to_numpy=True)
-            
+
             # Convert to list of floats
             return embedding.tolist()
         except Exception as e:
@@ -237,7 +235,9 @@ class LiteLLMEmbeddingProvider(EmbeddingProvider):
         self._dimension = 1536  # Default, varies by model
         
         try:
-            import litellm
+            import importlib.util
+            if not importlib.util.find_spec("litellm"):
+                raise ImportError("litellm required. Install: pip install litellm")
             logger.info(f"LiteLLM embedding provider initialized ({model})")
         except ImportError:
             raise ImportError("litellm required. Install: pip install litellm")
