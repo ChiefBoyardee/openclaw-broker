@@ -1,0 +1,58 @@
+# OpenClaw Automatic Update Timer
+# File: deploy/systemd/openclaw-auto-update.timer
+#
+# This timer triggers the openclaw-auto-update.service to check for
+# and apply updates at regular intervals.
+#
+# Installation:
+#   1. Copy both timer and service template to /etc/systemd/system/:
+#      sudo cp deploy/systemd/openclaw-auto-update.timer /etc/systemd/system/
+#      sudo cp deploy/systemd/openclaw-auto-update.service.template /etc/systemd/system/openclaw-auto-update.service
+#
+#   2. Edit the service file with your actual paths:
+#      sudo sed -i 's|REPO_ROOT_PLACEHOLDER|/opt/openclaw-broker|g' /etc/systemd/system/openclaw-auto-update.service
+#      sudo sed -i 's|REPO_USER_PLACEHOLDER|your-username|g' /etc/systemd/system/openclaw-auto-update.service
+#      sudo sed -i 's|COMPONENT_PLACEHOLDER|vps|g' /etc/systemd/system/openclaw-auto-update.service
+#
+#   3. Reload and enable:
+#      sudo systemctl daemon-reload
+#      sudo systemctl enable --now openclaw-auto-update.timer
+#
+#   4. Verify it's scheduled:
+#      sudo systemctl list-timers openclaw-auto-update.timer
+#
+# Configuration:
+#   The default schedule runs daily at 3:00 AM. Modify the OnCalendar
+#   line below to change this. Some examples:
+#
+#     OnCalendar=daily         # Every day at midnight
+#     OnCalendar=weekly        # Every week
+#     OnCalendar=*:00/6        # Every 6 hours
+#     OnCalendar=Mon,Fri 02:00 # Monday and Friday at 2 AM
+#
+# Manual trigger:
+#   sudo systemctl start openclaw-auto-update.service
+#
+# View timer status:
+#   sudo systemctl status openclaw-auto-update.timer
+#   sudo systemctl list-timers --all
+
+[Unit]
+Description=OpenClaw Automatic Update Timer
+Documentation=https://github.com/GatlenCulp/OpenClaw
+
+[Timer]
+# When to run (default: daily at 3:00 AM)
+OnCalendar=*-*-* 03:00:00
+
+# Add a random delay to avoid thundering herd (0-30 minutes)
+RandomizedDelaySec=30m
+
+# Run immediately if we missed the last scheduled time
+Persistent=true
+
+# Don't overlap runs (if previous is still running, skip this one)
+AccuracySec=1h
+
+[Install]
+WantedBy=timers.target

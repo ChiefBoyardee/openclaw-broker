@@ -76,6 +76,23 @@ See the llama.cpp setup script for model download options, GPU layer configurati
 | **Runner (Jetson)** | [runner-jetson.env.example](runner-jetson.env.example) | Jetson Orin with local LLM |
 | **Discord bot** | [bot.env.example](bot.env.example) | VPS per instance: `/opt/openclaw-bot-<instance>/bot.env` |
 
+### Scripts Reference
+
+| Script | Purpose |
+|--------|---------|
+| `deploy/onboard_broker.sh` | One-time broker setup |
+| `deploy/onboard_runner.sh` | One-time runner setup |
+| `deploy/onboard_bot.sh` | One-time Discord bot setup |
+| `deploy/install_wsl_llamacpp.sh` | Complete WSL + llama.cpp setup |
+| `deploy/scripts/setup_llama_cpp.sh` | Setup llama.cpp server only |
+| `deploy/scripts/check_updates.sh` | Check GitHub for updates |
+| `deploy/scripts/auto_update.sh` | Apply updates automatically |
+| `deploy/scripts/install_auto_update.sh` | Install systemd auto-update timer |
+| `deploy/scripts/version_info.sh` | Show version and status |
+| `deploy/scripts/update_vps.sh` | Manual VPS update |
+| `deploy/scripts/update_runner_wsl.sh` | Manual WSL runner update |
+| `deploy/scripts/update_runner_jetson.sh` | Manual Jetson runner update |
+
 ## Our environment (VPS + WSL)
 
 - **VPS:** Broker + one or more Discord bot instances. Broker bound to Tailscale IP (e.g. `http://100.x.x.x:8443`).
@@ -103,4 +120,66 @@ Use the **onboarding scripts** so you rarely edit env files by hand:
 
 - **Broker:** `./deploy/onboard_broker.sh` — installs broker, prompts for bind address/port, generates or accepts tokens, writes `broker.env`, optionally starts. Use `--enable` to start without prompting.
 - **Runner:** `./deploy/onboard_runner.sh` — prompts for `BROKER_URL` and `WORKER_TOKEN` (from broker), writes `runner/runner.env`. No sudo; run on WSL or worker machine.
+- **Runner (llama.cpp):** `./deploy/install_wsl_llamacpp.sh` — complete WSL setup with llama.cpp GGUF support. See below.
 - **Bot:** `./deploy/onboard_bot.sh <instance_name>` — installs one bot instance, prompts for `DISCORD_TOKEN`, `BOT_TOKEN`, `BROKER_URL`, and allowlist ID(s), writes `bot.env`, optionally starts.
+
+## Automatic Updates
+
+OpenClaw supports automatic updates via systemd timers (Linux/VPS) or manual cron jobs.
+
+### Quick Setup (systemd)
+
+```bash
+# Install auto-update timer (detects component automatically)
+sudo ./deploy/scripts/install_auto_update.sh --enable
+
+# Or specify component explicitly:
+sudo ./deploy/scripts/install_auto_update.sh --component vps --enable
+sudo ./deploy/scripts/install_auto_update.sh --component runner --enable
+sudo ./deploy/scripts/install_auto_update.sh --component jetson --enable
+
+# Customize schedule (default: daily at 3 AM)
+sudo ./deploy/scripts/install_auto_update.sh --component vps \
+  --interval "*:00/6" --enable  # Every 6 hours
+```
+
+### Manual Update Commands
+
+```bash
+# Check for updates without applying
+./deploy/scripts/check_updates.sh
+
+# Apply updates (auto-detects component)
+./deploy/scripts/auto_update.sh
+
+# Force update even if no new commits
+./deploy/scripts/auto_update.sh --force
+
+# Update specific component with restart
+./deploy/scripts/auto_update.sh --restart vps
+./deploy/scripts/auto_update.sh --restart runner
+./deploy/scripts/auto_update.sh --restart jetson
+```
+
+### Update Status
+
+```bash
+# Show version and component status
+./deploy/scripts/version_info.sh
+
+# Include update check
+./deploy/scripts/version_info.sh --check
+```
+
+### Cron Setup (Alternative to systemd)
+
+If systemd timers aren't available, use cron:
+
+```bash
+# Edit crontab
+crontab -e
+
+# Check hourly, update daily at 3 AM
+0 * * * * cd /path/to/openclaw-broker && ./deploy/scripts/check_updates.sh --quiet
+0 3 * * * cd /path/to/openclaw-broker && ./deploy/scripts/auto_update.sh --quiet --restart
+```
