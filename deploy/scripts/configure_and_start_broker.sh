@@ -10,7 +10,37 @@ BROKER_PORT="${BROKER_PORT:-8000}"
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 BROKER_ENV="/opt/openclaw-broker/broker.env"
 
+require_cmd() {
+  local cmd="$1"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "Error: required command '$cmd' is not installed or not in PATH." >&2
+    exit 1
+  fi
+}
+
 echo "[configure_broker] BROKER_HOST=$BROKER_HOST BROKER_PORT=$BROKER_PORT REPO_ROOT=$REPO_ROOT"
+
+if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+  echo "Error: run this script as root. It writes /opt, /var/lib, and starts a systemd service." >&2
+  exit 1
+fi
+require_cmd openssl
+require_cmd curl
+require_cmd systemctl
+
+if ! getent group openclaw >/dev/null 2>&1; then
+  groupadd openclaw
+  echo "[configure_broker] group openclaw created."
+fi
+if ! id -u openclaw >/dev/null 2>&1; then
+  useradd -r -g openclaw -s /usr/sbin/nologin openclaw
+  echo "[configure_broker] user openclaw created."
+fi
+
+if [[ ! "$BROKER_PORT" =~ ^[0-9]+$ ]]; then
+  echo "Error: BROKER_PORT must be numeric. Got: $BROKER_PORT" >&2
+  exit 1
+fi
 
 mkdir -p /opt/openclaw-broker
 if [[ ! -f "$BROKER_ENV" ]]; then
@@ -39,5 +69,12 @@ systemctl start openclaw-broker
 echo "[configure_broker] openclaw-broker started."
 sleep 1
 systemctl status openclaw-broker --no-pager || true
-curl -s "http://${BROKER_HOST}:${PORT}/health" && echo "" || echo "Health check failed or wrong host/port."
+if ! curl -s "http://${BROKER_HOST}:${PORT}/health"; then
+  echo "Health check failed. Next checks:" >&2
+  echo "  systemctl status openclaw-broker --no-pager" >&2
+  echo "  journalctl -u openclaw-broker -n 50 --no-pager" >&2
+  echo "  cat $BROKER_ENV" >&2
+else
+  echo ""
+fi
 echo "[configure_broker] If workers run off-VPS, open TCP ${PORT} in the cloud firewall. See docs/VPS_FIREWALL.md"

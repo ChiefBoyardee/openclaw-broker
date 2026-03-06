@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# OpenClaw WSL Worker Installation with llama.cpp (GGUF) support
+# OpenClaw WSL worker installation with llama.cpp (GGUF) support
 #
 # This script automates the complete setup of an OpenClaw worker on WSL:
 #   1. Installs the OpenClaw runner
@@ -19,7 +19,7 @@
 #   # With pre-set environment variables (fully automated)
 #   BROKER_URL=http://100.x.x.x:8443 \
 #   WORKER_TOKEN=your_token_here \
-#   MODEL_PATH=/opt/models/your-model.gguf \
+#   MODEL_PATH=/path/to/your-model.gguf \
 #   ./deploy/install_wsl_llamacpp.sh --auto
 #
 #   # User-mode install (no sudo, installs to ~/.local)
@@ -33,9 +33,9 @@
 #   LLAMA_N_GPU_LAYERS - GPU layers to offload (default: 35, set 0 for CPU)
 #
 # After installation:
-#   - Start server: /opt/llama-cpp-server/start-server.sh
-#   - Test server: /opt/llama-cpp-server/test-server.sh
-#   - Start runner: cd <repo> && runner/start.sh
+#   - Start server: ~/.local/llama-cpp-server/start-server.sh (or /opt/llama-cpp-server/start-server.sh)
+#   - Test server: ~/.local/llama-cpp-server/test-server.sh
+#   - Start runner: cd <repo> && RUNNER_ENV=<repo>/runner/runner.env runner/start.sh
 #
 # For help: ./deploy/install_wsl_llamacpp.sh --help
 
@@ -106,10 +106,12 @@ AFTER INSTALLATION:
     1. Start the llama.cpp server:
        sudo systemctl start llama-cpp-server   (if using systemd)
        OR
-       /opt/llama-cpp-server/start-server.sh    (manual start)
+       ~/.local/llama-cpp-server/start-server.sh  (manual start for --user)
+       OR
+       /opt/llama-cpp-server/start-server.sh      (manual start for system mode)
 
     2. Start the OpenClaw runner:
-       cd $REPO_ROOT && runner/start.sh
+       cd $REPO_ROOT && RUNNER_ENV=$REPO_ROOT/runner/runner.env runner/start.sh
 
     3. Test from Discord:
        ask llamacpp: Hello!
@@ -147,6 +149,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+if [[ "$INSTALL_MODE" == "user" ]]; then
+  LLAMA_CPP_DIR="${HOME}/.local/llama-cpp-server"
+  MODELS_DIR="${HOME}/.local/share/openclaw-models"
+  SERVER_LOG_DIR="${HOME}/.local/state/llama-cpp-server"
+  RUNNER_LOG_DIR_PATH="${HOME}/.local/state/openclaw-runner"
+else
+  LLAMA_CPP_DIR="/opt/llama-cpp-server"
+  MODELS_DIR="/opt/models"
+  SERVER_LOG_DIR="/var/log/llama-cpp-server"
+  RUNNER_LOG_DIR_PATH="/var/log/openclaw-runner"
+fi
+RUNNER_ENV_PATH="${REPO_ROOT}/runner/runner.env"
+SERVER_ENV_PATH="${LLAMA_CPP_DIR}/server.env"
+
 # Check prerequisites
 check_prerequisites() {
   info "Checking prerequisites..."
@@ -159,6 +175,22 @@ check_prerequisites() {
   
   PYTHON_VERSION=$(python3 --version | cut -d' ' -f2 | cut -d'.' -f1,2)
   info "Python version: $PYTHON_VERSION"
+  if ! python3 -m venv --help >/dev/null 2>&1; then
+    error "python3 venv support is missing. Install the Python venv package for your distro first."
+    exit 1
+  fi
+  if ! command -v curl &> /dev/null; then
+    error "curl is not installed. Please install curl first."
+    exit 1
+  fi
+  if [[ "$WITH_SYSTEMD" == true ]] && ! command -v systemctl >/dev/null 2>&1; then
+    error "--systemd was requested, but systemctl is not available on this machine."
+    exit 1
+  fi
+  if [[ "$WITH_SYSTEMD" == true && "$INSTALL_MODE" == "user" ]]; then
+    error "--systemd cannot be combined with --user. Use system mode for systemd installs."
+    exit 1
+  fi
   
   # Check if we're in WSL (optional but helpful)
   if [[ -f /proc/version ]] && grep -q Microsoft /proc/version; then
@@ -201,7 +233,8 @@ get_configuration() {
     fi
     
     if [[ -z "$WORKER_TOKEN" ]]; then
-      read -r -p "WORKER_TOKEN: " WORKER_TOKEN
+      read -rs -p "WORKER_TOKEN: " WORKER_TOKEN
+      echo ""
     fi
     
     if [[ -z "$WORKER_ID" ]]; then
@@ -235,6 +268,8 @@ get_configuration() {
   info "  BROKER_URL: $BROKER_URL"
   info "  WORKER_ID: $WORKER_ID"
   info "  GPU Layers: $LLAMA_N_GPU_LAYERS"
+  info "  Runner env path: $RUNNER_ENV_PATH"
+  info "  llama.cpp dir: $LLAMA_CPP_DIR"
 }
 
 # Install llama.cpp server
@@ -250,22 +285,26 @@ install_llama_cpp() {
   fi
   
   if [[ -n "$MODEL_PATH" ]]; then
-    MODEL_PATH="$MODEL_PATH" "$REPO_ROOT/deploy/scripts/setup_llama_cpp.sh" $setup_args
+    LLAMA_CPP_DIR="$LLAMA_CPP_DIR" MODELS_DIR="$MODELS_DIR" LLAMA_LOG_DIR="$SERVER_LOG_DIR" \
+      MODEL_PATH="$MODEL_PATH" "$REPO_ROOT/deploy/scripts/setup_llama_cpp.sh" $setup_args
   else
-    "$REPO_ROOT/deploy/scripts/setup_llama_cpp.sh" $setup_args
+    LLAMA_CPP_DIR="$LLAMA_CPP_DIR" MODELS_DIR="$MODELS_DIR" LLAMA_LOG_DIR="$SERVER_LOG_DIR" \
+      "$REPO_ROOT/deploy/scripts/setup_llama_cpp.sh" $setup_args
   fi
   
   success "llama.cpp server setup complete"
 }
 
-# Get the installed model name
-get_installed_model() {
-  local server_env="/opt/llama-cpp-server/server.env"
-  if [[ -f "$server_env" ]]; then
-    source "$server_env"
-    echo "$LLAMA_MODEL"
-  else
-    echo ""
+# Read a value from the generated llama.cpp server env
+get_server_env_value() {
+  local key="$1"
+  if [[ -f "$SERVER_ENV_PATH" ]]; then
+    (
+      set -a
+      source "$SERVER_ENV_PATH"
+      set +a
+      eval "printf '%s' \"\${$key:-}\""
+    )
   fi
 }
 
@@ -273,12 +312,8 @@ get_installed_model() {
 install_runner() {
   info "Installing OpenClaw runner..."
   
-  local install_args=""
-  if [[ "$INSTALL_MODE" == "user" ]]; then
-    export RUNNER_ENV_DIR="${HOME}/.local/openclaw-runner"
-    export RUNNER_LOG_DIR="${HOME}/.local/log/openclaw-runner"
-  fi
-  
+  export RUNNER_ENV_DIR="$REPO_ROOT/runner"
+  export RUNNER_LOG_DIR="$RUNNER_LOG_DIR_PATH"
   bash "$REPO_ROOT/deploy/scripts/install_runner.sh"
   
   success "Runner installation complete"
@@ -288,9 +323,12 @@ install_runner() {
 configure_runner() {
   info "Configuring runner environment..."
   
-  local runner_env="$REPO_ROOT/runner/runner.env"
   local model_name
-  model_name=$(get_installed_model)
+  local server_port
+  model_name=$(get_server_env_value "LLAMA_MODEL")
+  server_port=$(get_server_env_value "LLAMA_PORT")
+  server_port="${server_port:-8000}"
+  LLAMA_SERVER_PORT="$server_port"
   
   if [[ -z "$model_name" ]]; then
     warn "No model detected. Using placeholder in runner.env"
@@ -298,18 +336,19 @@ configure_runner() {
   fi
   
   # Create runner.env from template
-  cat > "$runner_env" << EOF
-# Generated by install_wsl_llamacpp.sh — do not commit.
+  cat > "$RUNNER_ENV_PATH" << EOF
+# Generated by install_wsl_llamacpp.sh â€” do not commit.
 # OpenClaw Runner with llama.cpp (GGUF) backend
 
 BROKER_URL="$BROKER_URL"
 WORKER_TOKEN="$WORKER_TOKEN"
 WORKER_ID="$WORKER_ID"
 WORKER_CAPS=llm:llamacpp,repo_tools
+RUNNER_LOG_DIR="$RUNNER_LOG_DIR_PATH"
 
 # LLM (OpenAI-compatible llama.cpp server)
 LLM_PROVIDER=openai_compat
-LLM_BASE_URL=http://127.0.0.1:8000/v1
+LLM_BASE_URL=http://127.0.0.1:$server_port/v1
 LLM_API_KEY=
 LLM_MODEL=$model_name
 LLM_TEMPERATURE=0.2
@@ -325,7 +364,7 @@ POLL_INTERVAL_SEC=10
 RESULT_TIMEOUT_SEC=300
 EOF
   
-  success "Created runner configuration: $runner_env"
+  success "Created runner configuration: $RUNNER_ENV_PATH"
 }
 
 # Create convenience start script
@@ -334,7 +373,7 @@ create_start_script() {
   
   local start_all="$REPO_ROOT/start-wsl-worker.sh"
   
-  cat > "$start_all" << 'EOF'
+  cat > "$start_all" << EOF
 #!/usr/bin/env bash
 # OpenClaw WSL Worker - Quick Start Script
 # Starts both llama.cpp server and OpenClaw runner
@@ -342,8 +381,19 @@ create_start_script() {
 set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SERVER_SCRIPT="/opt/llama-cpp-server/start-server.sh"
+SERVER_SCRIPT="$LLAMA_CPP_DIR/start-server.sh"
 RUNNER_SCRIPT="$REPO_ROOT/runner/start.sh"
+RUNNER_ENV_PATH="$RUNNER_ENV_PATH"
+SERVER_LOG_DIR="$SERVER_LOG_DIR"
+SERVER_ENV_PATH="$SERVER_ENV_PATH"
+PORT="8000"
+
+if [[ -f "$SERVER_ENV_PATH" ]]; then
+  set -a
+  source "$SERVER_ENV_PATH"
+  set +a
+  PORT="${LLAMA_PORT:-8000}"
+fi
 
 echo "========================================"
 echo "Starting OpenClaw WSL Worker"
@@ -351,41 +401,41 @@ echo "========================================"
 echo ""
 
 # Check if server is already running
-if curl -s http://127.0.0.1:8000/v1/models > /dev/null 2>&1; then
-  echo "✓ llama.cpp server is already running"
+if curl -s "http://127.0.0.1:$PORT/v1/models" > /dev/null 2>&1; then
+  echo "âœ“ llama.cpp server is already running"
 else
-  echo "→ Starting llama.cpp server..."
+  echo "â†’ Starting llama.cpp server..."
   if [[ -f "$SERVER_SCRIPT" ]]; then
+    mkdir -p "$SERVER_LOG_DIR"
     # Start in background
-    nohup "$SERVER_SCRIPT" > /tmp/llama-server.log 2>&1 &
+    nohup "$SERVER_SCRIPT" > "$SERVER_LOG_DIR/server.log" 2>&1 &
     echo "  Server starting in background (PID: $!)"
-    echo "  Logs: /tmp/llama-server.log"
+    echo "  Logs: $SERVER_LOG_DIR/server.log"
     
     # Wait for server to be ready
     echo "  Waiting for server to start..."
     for i in {1..30}; do
-      if curl -s http://127.0.0.1:8000/v1/models > /dev/null 2>&1; then
-        echo "  ✓ Server is ready!"
+      if curl -s "http://127.0.0.1:$PORT/v1/models" > /dev/null 2>&1; then
+        echo "  âœ“ Server is ready!"
         break
       fi
       sleep 1
     done
   else
-    echo "  ✗ Server script not found at $SERVER_SCRIPT"
+    echo "  âœ— Server script not found at $SERVER_SCRIPT"
     echo "    Please run ./deploy/scripts/setup_llama_cpp.sh first"
     exit 1
   fi
 fi
 
 echo ""
-echo "→ Starting OpenClaw runner..."
+echo "â†’ Starting OpenClaw runner..."
 echo "  Press Ctrl+C to stop the runner"
 echo ""
 
-# Source the environment and run
+# Run via the repo start script so RUNNER_ENV and logging stay consistent
 cd "$REPO_ROOT"
-export $(grep -v '^#' runner/runner.env | xargs)
-exec python -m runner.runner
+exec env RUNNER_ENV="$RUNNER_ENV_PATH" "$RUNNER_SCRIPT"
 EOF
 
   chmod +x "$start_all"
@@ -411,26 +461,26 @@ print_instructions() {
   fi
   
   echo "Quick Start:"
-  echo "  1. Start the server: /opt/llama-cpp-server/start-server.sh"
+  echo "  1. Start the server: $LLAMA_CPP_DIR/start-server.sh"
   echo "     (or use the systemd command above)"
   echo ""
-  echo "  2. Test the server: /opt/llama-cpp-server/test-server.sh"
+  echo "  2. Test the server: $LLAMA_CPP_DIR/test-server.sh"
   echo ""
   echo "  3. Start the runner: $REPO_ROOT/start-wsl-worker.sh"
-  echo "     (or: cd $REPO_ROOT && runner/start.sh)"
+  echo "     (or: cd $REPO_ROOT && RUNNER_ENV=$RUNNER_ENV_PATH runner/start.sh)"
   echo ""
   echo "  4. Test from Discord: ask llamacpp: Hello!"
   echo ""
   
   echo "Configuration:"
-  echo "  Runner env: $REPO_ROOT/runner/runner.env"
-  echo "  Server env: /opt/llama-cpp-server/server.env"
+  echo "  Runner env: $RUNNER_ENV_PATH"
+  echo "  Server env: $SERVER_ENV_PATH"
   echo ""
   
   echo "Useful Commands:"
-  echo "  View server logs: tail -f /tmp/llama-server.log"
-  echo "  Test server: curl http://127.0.0.1:8000/v1/models"
-  echo "  Check runner: cat /var/log/openclaw-runner/runner.log"
+  echo "  View server logs: tail -f $SERVER_LOG_DIR/server.log"
+  echo "  Test server: curl http://127.0.0.1:${LLAMA_SERVER_PORT:-8000}/v1/models"
+  echo "  Check runner: tail -f $RUNNER_LOG_DIR_PATH/runner.log"
   echo ""
   
   echo "Documentation:"

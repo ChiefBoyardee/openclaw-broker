@@ -8,13 +8,14 @@ This guide walks you through setting up OpenClaw from scratch. Whether you want 
 
 1. [What You're Building](#what-youre-building)
 2. [Prerequisites](#prerequisites)
-3. [Phase 1: Local Setup (Test Everything Works)](#phase-1-local-setup-test-everything-works)
-4. [Phase 2: Create Your Discord Bot](#phase-2-create-your-discord-bot)
-5. [Phase 3: Production Deployment (VPS + Broker + Bot)](#phase-3-production-deployment-vps--broker--bot)
-6. [Phase 4: Add the Runner (Worker)](#phase-4-add-the-runner-worker)
-7. [Phase 5: Optional — Repos, LLM, Multi-Worker](#phase-5-optional--repos-llm-multi-worker)
-8. [Updating After Code Changes](#updating-after-code-changes)
-9. [Troubleshooting](#troubleshooting)
+3. [Start Here](#start-here)
+4. [Phase 1: Local Setup (Test Everything Works)](#phase-1-local-setup-test-everything-works)
+5. [Phase 2: Create Your Discord Bot](#phase-2-create-your-discord-bot)
+6. [Phase 3: Recommended Production Deployment (VPS + Broker + Bot)](#phase-3-recommended-production-deployment-vps--broker--bot)
+7. [Phase 4: Add the Runner (Worker)](#phase-4-add-the-runner-worker)
+8. [Phase 5: Optional — Repos, LLM, Multi-Worker](#phase-5-optional--repos-llm-multi-worker)
+9. [Updating After Code Changes](#updating-after-code-changes)
+10. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -48,6 +49,36 @@ OpenClaw has three main pieces:
 ### For Optional LLM Features
 
 - **An OpenAI-compatible API** — e.g. [vLLM](https://docs.vllm.ai/) on WSL, or a local model on Jetson
+
+---
+
+## Start Here
+
+### Recommended production topology
+
+Use this deployment shape unless you specifically want something else:
+
+- **VPS:** broker + Discord bot instance(s)
+- **WSL / Jetson / worker box:** runner
+- **Optional LLM:** on the runner host, or reachable from that runner via an OpenAI-compatible API
+
+This guide uses that topology throughout Phase 3 and Phase 4.
+
+### Alternate topology
+
+If you intentionally want **WSL to run broker + LLM + runner** and **the VPS to run only the Discord bot**, use [docs/COMMANDS_WSL_AND_VPS.md](COMMANDS_WSL_AND_VPS.md). Treat that as an alternate runbook, not the default beginner path.
+
+### Token and env handoff
+
+| Value | Generated where | Used by |
+|-------|------------------|---------|
+| `WORKER_TOKEN` | Broker setup | Broker + every runner that should claim jobs from that broker |
+| `BOT_TOKEN` | Broker setup | Broker + every Discord bot instance that should submit jobs to that broker |
+| `DISCORD_TOKEN` | Discord Developer Portal | One bot instance only |
+| `BROKER_URL` | Derived from broker host/port | Runner + Discord bot |
+| `ALLOWED_USER_ID` | Your Discord account | Discord bot allowlist |
+
+**Important:** bot instances talking to the same broker share the broker's `BOT_TOKEN`. They do **not** share `DISCORD_TOKEN`; each Discord Application has its own `DISCORD_TOKEN`.
 
 ---
 
@@ -210,7 +241,7 @@ If you get a reply, **the full pipeline works locally.**
 
 ---
 
-## Phase 3: Production Deployment (VPS + Broker + Bot)
+## Phase 3: Recommended Production Deployment (VPS + Broker + Bot)
 
 For production, the broker and Discord bot run on a VPS (e.g. Ubuntu). The runner can run on the same machine or elsewhere (Phase 4).
 
@@ -304,7 +335,7 @@ cd /path/to/openclaw-broker
 bash deploy/scripts/install_runner.sh
 ```
 
-2. Create runner env:
+1. Create runner env:
 
 ```bash
 ./deploy/onboard_runner.sh
@@ -314,34 +345,37 @@ When prompted, paste `BROKER_URL` and `WORKER_TOKEN` from the broker onboarding 
 
 If the script isn’t executable: `bash deploy/onboard_runner.sh`
 
-3. Start the runner:
+1. Start the runner:
 
 ```bash
-# If env is in runner/runner.env:
+# Default repo-local env created by onboard_runner.sh:
+./runner/start.sh
+
+# Or foreground:
 export $(grep -v '^#' runner/runner.env | xargs)
 python runner/runner.py
 
-# Or use the start script (logs to /var/log/openclaw-runner/runner.log):
-RUNNER_ENV=runner/runner.env ./runner/start.sh
+# Or use a non-default env path:
+RUNNER_ENV=/path/to/runner.env ./runner/start.sh
 ```
 
-4. Verify: From Discord, send `capabilities`. You should see the runner’s ID and capabilities.
+1. Verify: From Discord, send `capabilities`. You should see the runner’s ID and capabilities.
 
 ### Option B — Runner on Jetson (or Linux with systemd)
 
 1. Clone the repo on the Jetson
-2. Install the systemd service:
+1. Install the systemd service:
 
 ```bash
 ./deploy/install_runner_systemd.sh
 ```
 
-3. Edit the runner env (e.g. `/opt/openclaw-runner-jetson/runner.env`):
+1. Edit the runner env (e.g. `/opt/openclaw-runner-jetson/runner.env`):
 
 - `BROKER_URL` — broker address (Tailscale or VPS IP)
 - `WORKER_TOKEN` — from broker onboarding
 
-4. Enable and start:
+1. Enable and start:
 
 ```bash
 sudo systemctl enable openclaw-runner
@@ -366,7 +400,7 @@ For `repos`, `grep`, `cat`, etc., the runner needs a repo allowlist:
 }
 ```
 
-2. In runner env, set:
+1. In runner env, set:
 
 ```bash
 RUNNER_REPOS_BASE=/home/you/src
@@ -390,7 +424,7 @@ LLM_TEMPERATURE=0.2
 LLM_MAX_TOKENS=4096
 ```
 
-2. Verify the endpoint:
+1. Verify the endpoint:
 
 ```bash
 curl -s http://127.0.0.1:8000/v1/models | head
@@ -402,11 +436,12 @@ See [docs/MULTI_WORKER_LLM_SMOKE.md](MULTI_WORKER_LLM_SMOKE.md) for multi-worker
 
 ## Updating After Code Changes
 
-After `git pull`, run the appropriate script:
+After `git pull`, run the appropriate path for the topology you are actually using:
 
 | Where | Script |
 |-------|--------|
 | VPS (broker + bots) | `bash deploy/scripts/update_vps.sh` |
+| VPS (bot only; broker lives elsewhere) | `git pull`, then refresh each bot instance and restart `openclaw-discord-bot@<instance>` |
 | Jetson runner | `bash deploy/scripts/update_runner_jetson.sh` then `sudo systemctl restart openclaw-runner` |
 | WSL runner | `bash deploy/scripts/update_runner_wsl.sh` then restart the runner process |
 
@@ -431,6 +466,12 @@ See [docs/DEPLOY_AND_UPDATE.md](DEPLOY_AND_UPDATE.md) for details.
 # Broker
 curl -s http://YOUR_BROKER_URL/health
 # Expected: {"ok":true,"ts_bound":true}
+
+# Discord checks
+# DM the bot: whoami
+# DM the bot: ping hello
+# DM the bot: capabilities
+# DM the bot: ask Hello
 
 # Smoke test (local)
 python scripts/smoke.py
