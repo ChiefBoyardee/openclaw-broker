@@ -1,0 +1,54 @@
+# OpenClaw Automatic Update Service
+# Template: deploy/systemd/openclaw-auto-update.service.template
+#
+# This service runs the automatic update check and applies updates.
+# It's designed to be triggered by openclaw-auto-update.timer.
+#
+# Installation:
+#   1. Copy this file and the timer template to /etc/systemd/system/
+#   2. Update REPO_ROOT_PLACEHOLDER to your actual repo path
+#   3. Reload systemd: sudo systemctl daemon-reload
+#   4. Enable timer: sudo systemctl enable --now openclaw-auto-update.timer
+#
+# Manual trigger:
+#   sudo systemctl start openclaw-auto-update.service
+#
+# View logs:
+#   sudo journalctl -u openclaw-auto-update.service -f
+#   sudo journalctl -u openclaw-auto-update.service --since "1 hour ago"
+
+[Unit]
+Description=OpenClaw Automatic Update Check
+After=network-online.target
+Wants=network-online.target
+# Don't run if network is not available
+ConditionPathExists=/run/systemd/netif/state
+
+[Service]
+Type=oneshot
+User=REPO_USER_PLACEHOLDER
+WorkingDirectory=REPO_ROOT_PLACEHOLDER
+
+# Environment
+Environment="AUTO_UPDATE_LOG=/var/log/openclaw/auto-update.log"
+Environment="COMPONENT=COMPONENT_PLACEHOLDER"
+
+# The update script
+ExecStart=REPO_ROOT_PLACEHOLDER/deploy/scripts/auto_update.sh --quiet --restart
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw-auto-update
+
+# Security hardening (optional but recommended)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=REPO_ROOT_PLACEHOLDER /var/log/openclaw /var/lib/openclaw
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target
