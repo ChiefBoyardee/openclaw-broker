@@ -10,6 +10,7 @@ A small, secure job queue: **broker** (FastAPI + SQLite), **runner** (worker tha
 ## Table of contents
 
 - [Components](#components)
+- [Recommended deployment](#recommended-deployment)
 - [Quick start](#quick-start)
 - [Configuration](#configuration)
 - [Test with curl](#test-with-curl)
@@ -27,6 +28,22 @@ A small, secure job queue: **broker** (FastAPI + SQLite), **runner** (worker tha
 | **Broker**  | FastAPI app: `GET /health`, `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/next`, `POST /jobs/{id}/result`, `POST /jobs/{id}/fail`. Auth via `X-Bot-Token` and `X-Worker-Token`. Jobs support `failed` status, leases, and worker identity; stale running jobs are requeued. |
 | **Runner**  | Worker process: polls `GET /jobs/next` (sends `X-Worker-Id`), runs jobs (`ping`, `capabilities`, `plan_echo`, `approve_echo`, `repo_list`, `repo_status`, `repo_last_commit`, `repo_grep`, `repo_readfile`), posts results or failures. For WSL or a dedicated worker machine. See [docs/RUNNER_REPO_CONFIG.md](docs/RUNNER_REPO_CONFIG.md) for repo allowlist and env. |
 | **Discord bot** | Listens in DMs (or one channel); allowlisted user can send `ping`, `capabilities`, `plan <text>`, `approve <plan_id>`, `status <id>`, `repos`, `repostat <repo>`, `last <repo>`, `grep <repo> <query> [path]`, `cat <repo> <path> [start] [end]`, `ask <prompt>`, `urgo <prompt>`, `whoami`. Guardrails: cooldown and max concurrent jobs per user. |
+
+---
+
+## Recommended Deployment
+
+For most users, the smoothest production setup is:
+
+- **VPS:** broker + Discord bot instance(s)
+- **WSL or another worker box:** runner
+- **Optional LLM:** run on the same worker as the runner, or point the runner at another OpenAI-compatible endpoint
+
+Use these docs in this order:
+
+- **Beginner / recommended path:** [docs/INSTALLATION_GUIDE.md](docs/INSTALLATION_GUIDE.md)
+- **Env files and onboarding scripts:** [deploy/env.examples/README.md](deploy/env.examples/README.md)
+- **Alternate runbook:** [docs/COMMANDS_WSL_AND_VPS.md](docs/COMMANDS_WSL_AND_VPS.md) for the advanced `WSL = broker + LLM + runner` and `VPS = bot only` split
 
 ---
 
@@ -85,7 +102,7 @@ Generate strong random tokens for `WORKER_TOKEN` and `BOT_TOKEN`:
 openssl rand -hex 32
 ```
 
-Use the same `BOT_TOKEN` in the broker and in the Discord bot env. Use the same `WORKER_TOKEN` in the broker and in the runner env.
+Use the same `WORKER_TOKEN` in the broker and in every runner that should claim jobs from that broker. Use the same `BOT_TOKEN` in the broker and in every Discord bot instance that should submit jobs to that broker. Each bot instance still needs its own `DISCORD_TOKEN`.
 
 ### Broker
 
@@ -175,9 +192,10 @@ Clients (bot, runner, future UIs) can rely on this contract:
 
 ## Production deployment
 
-- **VPS (broker + Discord bot):** Clone to e.g. `/opt/openclaw/openclaw-broker`. **Streamlined:** run `./deploy/onboard_broker.sh` then `./deploy/onboard_bot.sh <instance>` for each bot (see [deploy/env.examples/](deploy/env.examples/)). **Manual:** Run `deploy/scripts/install_broker.sh`. For the Discord bot, the preferred approach is **multi-instance**: use the systemd template and install one instance per name (e.g. `clawhub`, `staging`) with `./deploy/install_bot_instance.sh <instance_name> [--enable]`. Each instance gets isolated dirs under `/opt/openclaw-bot-<instance>/` and `/var/lib/openclaw-bot-<instance>/`; env file is `/opt/openclaw-bot-<instance>/bot.env` (create from `bot.env.example`, never commit). Each instance needs its own Discord Application and `DISCORD_TOKEN` (and typically its own `BOT_TOKEN` and allowlist). Example: `./deploy/install_bot_instance.sh clawhub --enable` then `journalctl -u openclaw-discord-bot@clawhub -f`. See [docs/DISCORD_BOT_DEPLOY.md](docs/DISCORD_BOT_DEPLOY.md) for details. Single-instance legacy: `deploy/scripts/install_discord_bot.sh`. Create broker env and `/var/lib/openclaw-broker`; set `BROKER_HOST` to your Tailscale IP for tailnet-only binding. To configure and start the broker non-interactively on the VPS, run `./deploy/scripts/configure_and_start_broker.sh` (optionally `export BROKER_HOST=100.x.x.x` first). **After pulling updates:** run `bash deploy/scripts/update_vps.sh` to refresh deps and restart broker and all bot instances (see [docs/DEPLOY_AND_UPDATE.md](docs/DEPLOY_AND_UPDATE.md)).
-- **WSL runner:** Run `deploy/scripts/install_runner.sh`, create `runner.env` from `runner/runner.env.example` with `BROKER_URL` and `WORKER_TOKEN`, then run `runner/start.sh` or `python runner/runner.py`. **After pulling:** run `bash deploy/scripts/update_runner_wsl.sh` then restart the runner.
+- **VPS (broker + Discord bot):** Clone to e.g. `/opt/openclaw/openclaw-broker`. **Streamlined:** run `./deploy/onboard_broker.sh` once, then `./deploy/onboard_bot.sh <instance>` for each bot (see [deploy/env.examples/](deploy/env.examples/)). For multi-instance deploys, each instance gets isolated dirs under `/opt/openclaw-bot-<instance>/` and `/var/lib/openclaw-bot-<instance>/`; env file is `/opt/openclaw-bot-<instance>/bot.env`. Each instance needs its own Discord Application and `DISCORD_TOKEN`, but bot instances talking to the same broker should use that broker's shared `BOT_TOKEN`. **After pulling updates:** run `bash deploy/scripts/update_vps.sh` when the VPS hosts both broker and bot instances. See [docs/DISCORD_BOT_DEPLOY.md](docs/DISCORD_BOT_DEPLOY.md) and [docs/DEPLOY_AND_UPDATE.md](docs/DEPLOY_AND_UPDATE.md).
+- **WSL runner:** Run `bash deploy/scripts/install_runner.sh`, then `bash deploy/onboard_runner.sh`. By default this writes the repo-local env file at `runner/runner.env`, and `runner/start.sh` will use it automatically. **After pulling:** run `bash deploy/scripts/update_runner_wsl.sh` then restart the runner.
 - **VPS ↔ worker:** If the runner is off-VPS (e.g. WSL), open **TCP 8000** in your cloud provider’s firewall so the worker can reach the broker. See [docs/VPS_FIREWALL.md](docs/VPS_FIREWALL.md).
+- **Alternate topology:** If you intentionally want `WSL = broker + LLM + runner` and `VPS = bot only`, follow [docs/COMMANDS_WSL_AND_VPS.md](docs/COMMANDS_WSL_AND_VPS.md) instead of the default VPS-first deployment flow.
 
 See [SECURITY.md](SECURITY.md) for token handling and tailnet-only binding.
 
@@ -185,7 +203,7 @@ See [SECURITY.md](SECURITY.md) for token handling and tailnet-only binding.
 
 ## Project structure
 
-```
+```text
 openclaw-broker/
 ├── broker/              # FastAPI app
 │   ├── app.py
@@ -220,6 +238,8 @@ openclaw-broker/
 ## Documentation
 
 - **[INSTALLATION_GUIDE.md](docs/INSTALLATION_GUIDE.md)** — Step-by-step setup from zero to running (local + production, Discord bot, runner, optional LLM).
+- [deploy/env.examples/README.md](deploy/env.examples/README.md) — Onboarding scripts, env file layout, and quick reference for broker, runner, bot, and llama.cpp.
+- [docs/COMMANDS_WSL_AND_VPS.md](docs/COMMANDS_WSL_AND_VPS.md) — Advanced alternate deployment runbook for `WSL = broker + LLM + runner` and `VPS = bot only`.
 - [SECURITY.md](SECURITY.md) — Token handling, tailnet-only binding, file permissions.
 - [docs/DEPLOY_AND_UPDATE.md](docs/DEPLOY_AND_UPDATE.md) — CI (pytest on push/PR), smoke script, update scripts after pull, optional CD (deploy VPS from GitHub Actions).
 - [docs/DISCORD_BOT_DEPLOY.md](docs/DISCORD_BOT_DEPLOY.md) — Multi-instance Discord bot deployment (systemd template, env locations, whoami).

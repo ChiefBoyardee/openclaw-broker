@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Setup llama-cpp-python server for OpenClaw Runner (WSL or Linux worker).
+# Setup llama-cpp-python server for OpenClaw runner (WSL or Linux worker).
 # This script installs llama-cpp-python[server], creates model directory, and
 # optionally downloads a recommended GGUF model.
 #
 # Usage:
 #   ./deploy/scripts/setup_llama_cpp.sh              # Interactive setup
-#   MODEL_PATH=/opt/models/mymodel.gguf ./deploy/scripts/setup_llama_cpp.sh  # Use existing model
+#   MODEL_PATH=/path/to/mymodel.gguf ./deploy/scripts/setup_llama_cpp.sh  # Use existing model
 #
 # The script creates:
 #   - /opt/llama-cpp-server/venv  (virtual environment)
-#   - /opt/models/                (model storage directory)
+#   - /opt/models/                (model storage directory; or ~/.local/share/openclaw-models in --user mode)
 #   - systemd service (if --systemd flag provided)
 
 set -e
@@ -19,6 +19,7 @@ REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 # Configuration
 LLAMA_CPP_DIR="${LLAMA_CPP_DIR:-/opt/llama-cpp-server}"
 MODELS_DIR="${MODELS_DIR:-/opt/models}"
+LLAMA_LOG_DIR="${LLAMA_LOG_DIR:-/var/log/llama-cpp-server}"
 VENV_NAME="venv"
 
 # Default model (Qwen2.5-Coder-Instruct 7B Q4_K_M - good balance of quality/speed)
@@ -40,6 +41,7 @@ if [[ "$1" == "--user" ]]; then
   INSTALL_MODE="user"
   LLAMA_CPP_DIR="${HOME}/.local/llama-cpp-server"
   MODELS_DIR="${HOME}/.local/share/openclaw-models"
+  LLAMA_LOG_DIR="${HOME}/.local/state/llama-cpp-server"
   echo "[setup_llama_cpp] User-mode install (no sudo required)"
 else
   INSTALL_MODE="system"
@@ -50,6 +52,7 @@ fi
 echo "[setup_llama_cpp] Creating directories..."
 mkdir -p "$LLAMA_CPP_DIR"
 mkdir -p "$MODELS_DIR"
+mkdir -p "$LLAMA_LOG_DIR"
 
 # Create virtual environment
 echo "[setup_llama_cpp] Setting up Python virtual environment..."
@@ -63,7 +66,7 @@ echo "[setup_llama_cpp] Installing llama-cpp-python[server]..."
 "$LLAMA_CPP_DIR/$VENV_NAME/bin/pip" install --upgrade pip
 "$LLAMA_CPP_DIR/$VENV_NAME/bin/pip" install llama-cpp-python[server]
 
-# Install huggingface-cli for model downloads (optional but helpful)
+# Install huggingface-hub for model downloads
 "$LLAMA_CPP_DIR/$VENV_NAME/bin/pip" install huggingface-hub
 
 echo ""
@@ -88,7 +91,7 @@ if [[ -n "$MODEL_PATH" ]]; then
   MODEL_NAME="$MODEL_FILENAME"
   echo "[setup_llama_cpp] Using provided model: $MODEL_NAME"
 else
-  # Check if user already has models in /opt/models
+  # Check if user already has models in the target model directory
   EXISTING_MODELS=$(find "$MODELS_DIR" -name "*.gguf" -type f 2>/dev/null || true)
   if [[ -n "$EXISTING_MODELS" ]]; then
     echo "[setup_llama_cpp] Found existing GGUF models in $MODELS_DIR:"
@@ -96,7 +99,7 @@ else
       echo "  - $(basename "$model")"
     done
     echo ""
-    echo "[setup_llama_cpp] Use MODEL_PATH=/opt/models/<model.gguf> to use an existing model."
+    echo "[setup_llama_cpp] Use MODEL_PATH=$MODELS_DIR/<model.gguf> to use an existing model."
     echo "[setup_llama_cpp] Or continue to download a recommended model."
     echo ""
   fi
@@ -117,27 +120,25 @@ else
     d|D|"" )
       echo "[setup_llama_cpp] Downloading $DEFAULT_MODEL_NAME..."
       echo "[setup_llama_cpp] This may take 5-15 minutes depending on connection..."
-      "$LLAMA_CPP_DIR/$VENV_NAME/bin/huggingface-cli" download \
-        Qwen/Qwen2.5-Coder-7B-Instruct-GGUF \
-        "$DEFAULT_MODEL_NAME" \
-        --local-dir "$MODELS_DIR" \
-        --local-dir-use-symlinks False
+      "$LLAMA_CPP_DIR/$VENV_NAME/bin/python" -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download(repo_id='Qwen/Qwen2.5-Coder-7B-Instruct-GGUF', filename='$DEFAULT_MODEL_NAME', local_dir='$MODELS_DIR', local_dir_use_symlinks=False)
+"
       MODEL_NAME="$DEFAULT_MODEL_NAME"
       ;;
     s|S )
       echo "[setup_llama_cpp] Skipping download. Please place your .gguf model in $MODELS_DIR"
-      echo "[setup_llama_cpp] and re-run with MODEL_PATH=/opt/models/your-model.gguf"
+      echo "[setup_llama_cpp] and re-run with MODEL_PATH=$MODELS_DIR/your-model.gguf"
       MODEL_NAME=""
       ;;
     u|U )
-      read -r -p "Enter HuggingFace repo_id (e.g., owner/model-gguf): " REPO_ID
-      read -r -p "Enter filename (e.g., model-q4_k_m.gguf): " FILENAME
+      read -r -p "Enter HuggingFace repo_id (e.g., owner/model-gguf, not a filename): " REPO_ID
+      read -r -p "Enter exact filename from the repo (e.g., model-q4_k_m.gguf): " FILENAME
       echo "[setup_llama_cpp] Downloading $FILENAME from $REPO_ID..."
-      "$LLAMA_CPP_DIR/$VENV_NAME/bin/huggingface-cli" download \
-        "$REPO_ID" \
-        "$FILENAME" \
-        --local-dir "$MODELS_DIR" \
-        --local-dir-use-symlinks False
+      "$LLAMA_CPP_DIR/$VENV_NAME/bin/python" -c "
+from huggingface_hub import hf_hub_download
+hf_hub_download(repo_id='$REPO_ID', filename='$FILENAME', local_dir='$MODELS_DIR', local_dir_use_symlinks=False)
+"
       MODEL_NAME="$FILENAME"
       ;;
     * )
@@ -162,7 +163,6 @@ cat > "$LLAMA_CPP_DIR/start-server.sh" << 'SCRIPT'
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MODELS_DIR="${MODELS_DIR:-/opt/models}"
 
 # Load from environment file if it exists
 if [[ -f "$SCRIPT_DIR/server.env" ]]; then
@@ -170,6 +170,8 @@ if [[ -f "$SCRIPT_DIR/server.env" ]]; then
   source "$SCRIPT_DIR/server.env"
   set +a
 fi
+
+MODELS_DIR="${MODELS_DIR:-/opt/models}"
 
 MODEL_NAME="${1:-$LLAMA_MODEL}"
 PORT="${2:-${LLAMA_PORT:-8000}}"
@@ -217,6 +219,8 @@ LLAMA_MODEL=$MODEL_NAME
 LLAMA_PORT=$SERVER_PORT
 LLAMA_N_GPU_LAYERS=$N_GPU_LAYERS
 LLAMA_N_CTX=$N_CTX
+MODELS_DIR=$MODELS_DIR
+LLAMA_LOG_DIR=$LLAMA_LOG_DIR
 EOF
   echo "[setup_llama_cpp] Created $LLAMA_CPP_DIR/server.env"
 fi
@@ -297,6 +301,7 @@ echo "[setup_llama_cpp] ============================================"
 echo ""
 echo "Installation directory: $LLAMA_CPP_DIR"
 echo "Models directory: $MODELS_DIR"
+echo "Log directory: $LLAMA_LOG_DIR"
 echo ""
 
 if [[ -n "$MODEL_NAME" ]]; then

@@ -4,7 +4,7 @@ One-place reference for all component env files. **Do not commit real `.env` or 
 
 For a complete, beginner-friendly setup walkthrough (local + production, Discord, runner, optional LLM), see [docs/INSTALLATION_GUIDE.md](../../docs/INSTALLATION_GUIDE.md).
 
-## Quick start (VPS)
+## Quick start (recommended topology)
 
 From the repo root on the VPS. If a script is not executable (e.g. after a Windows clone), run it with `bash deploy/onboard_*.sh` instead of `./deploy/onboard_*.sh`.
 
@@ -21,7 +21,9 @@ From the repo root on the VPS. If a script is not executable (e.g. after a Windo
    ```
    Use the `BOT_TOKEN` and `BROKER_URL` from step 1.
 
-3. **Runner (WSL/worker)** — from repo root on WSL, run `./deploy/onboard_runner.sh` and paste `BROKER_URL` and `WORKER_TOKEN` from step 1 (or set them in env). This creates `runner/runner.env`. Then run `python runner/runner.py` or `runner/start.sh`.
+3. **Runner (WSL/worker)** — from repo root on WSL, run `./deploy/onboard_runner.sh` and paste `BROKER_URL` and `WORKER_TOKEN` from step 1 (or set them in env). This creates the default repo-local env file at `runner/runner.env`. Then run `./runner/start.sh` or `python runner/runner.py`.
+
+If you intentionally want the alternate deployment `WSL = broker + LLM + runner` and `VPS = bot only`, use [docs/COMMANDS_WSL_AND_VPS.md](../../docs/COMMANDS_WSL_AND_VPS.md).
 
 For **multi-worker LLM smoke** (WSL vLLM + Jetson Orin), caps, routing, and full steps: see [docs/MULTI_WORKER_LLM_SMOKE.md](../../docs/MULTI_WORKER_LLM_SMOKE.md). Use [runner-wsl.env.example](runner-wsl.env.example) and [runner-jetson.env.example](runner-jetson.env.example) for each worker.
 
@@ -55,10 +57,11 @@ For running GGUF models with llama.cpp on WSL:
    $EDITOR runner/runner.env
 
    # Start the server
-   /opt/llama-cpp-server/start-server.sh
+   ~/.local/llama-cpp-server/start-server.sh
+   # Or: /opt/llama-cpp-server/start-server.sh for system installs
 
    # Start the runner
-   runner/start.sh
+   RUNNER_ENV=runner/runner.env runner/start.sh
    ```
 
 3. **Discord routing**: Use `ask llamacpp:` or `ask llamacpp ` to target this worker.
@@ -70,7 +73,7 @@ See the llama.cpp setup script for model download options, GPU layer configurati
 | Component | Env file | Where it lives |
 |-----------|----------|----------------|
 | **Broker** | [broker.env.example](broker.env.example) | VPS: `/opt/openclaw-broker/broker.env` (or path used by systemd) |
-| **Runner** | [runner.env.example](runner.env.example) | WSL/worker: e.g. `runner/runner.env` or `/opt/openclaw-runner/runner.env` |
+| **Runner** | [runner.env.example](runner.env.example) | WSL/worker: default `runner/runner.env` in the repo |
 | **Runner (WSL + vLLM)** | [runner-wsl.env.example](runner-wsl.env.example) | WSL with vLLM backend |
 | **Runner (WSL + llama.cpp)** | [runner-llamacpp.env.example](runner-llamacpp.env.example) | WSL with llama.cpp GGUF backend |
 | **Runner (Jetson)** | [runner-jetson.env.example](runner-jetson.env.example) | Jetson Orin with local LLM |
@@ -103,6 +106,7 @@ See the llama.cpp setup script for model download options, GPU layer configurati
 - Generate tokens once: `openssl rand -hex 32` for each of `WORKER_TOKEN` and `BOT_TOKEN`.
 - Set `BROKER_HOST` to your Tailscale IP (e.g. `100.64.0.1`) and `BROKER_PORT=8443` if not 8000.
 - Use the same `BOT_TOKEN` in every bot instance that should talk to this broker.
+- Each bot instance still needs its own Discord Application and `DISCORD_TOKEN`.
 
 ### Runner (WSL)
 
@@ -119,7 +123,7 @@ See the llama.cpp setup script for model download options, GPU layer configurati
 Use the **onboarding scripts** so you rarely edit env files by hand:
 
 - **Broker:** `./deploy/onboard_broker.sh` — installs broker, prompts for bind address/port, generates or accepts tokens, writes `broker.env`, optionally starts. Use `--enable` to start without prompting.
-- **Runner:** `./deploy/onboard_runner.sh` — prompts for `BROKER_URL` and `WORKER_TOKEN` (from broker), writes `runner/runner.env`. No sudo; run on WSL or worker machine.
+- **Runner:** `./deploy/onboard_runner.sh` — prompts for `BROKER_URL` and `WORKER_TOKEN` (from broker), writes the default repo-local env file `runner/runner.env`. No sudo; run on WSL or worker machine.
 - **Runner (llama.cpp):** `./deploy/install_wsl_llamacpp.sh` — complete WSL setup with llama.cpp GGUF support. See below.
 - **Bot:** `./deploy/onboard_bot.sh <instance_name>` — installs one bot instance, prompts for `DISCORD_TOKEN`, `BOT_TOKEN`, `BROKER_URL`, and allowlist ID(s), writes `bot.env`, optionally starts.
 

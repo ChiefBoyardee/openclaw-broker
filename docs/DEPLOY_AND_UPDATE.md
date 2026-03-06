@@ -44,6 +44,31 @@ This will:
 
 Requires `sudo` for `systemctl restart`. The broker’s DB migration (e.g. new columns) runs automatically on broker startup. For backup and retention, see [Broker backup and retention](BROKER_BACKUP_RETENTION.md).
 
+### VPS (bot only; broker runs elsewhere)
+
+If the VPS hosts only Discord bot instances and the broker lives on another machine, `deploy/scripts/update_vps.sh` is **not** the right script because it assumes the broker is local too.
+
+Use this flow instead:
+
+```bash
+cd /opt/openclaw/openclaw-broker
+git pull
+```
+
+Then refresh each bot instance and restart it:
+
+```bash
+INSTANCE=mybot
+sudo rm -rf /opt/openclaw-bot-${INSTANCE}/discord_bot
+sudo cp -r /opt/openclaw/openclaw-broker/discord_bot /opt/openclaw-bot-${INSTANCE}/
+sudo cp /opt/openclaw/openclaw-broker/requirements.txt /opt/openclaw-bot-${INSTANCE}/
+sudo chown -R openclaw:openclaw /opt/openclaw-bot-${INSTANCE}/discord_bot /opt/openclaw-bot-${INSTANCE}/requirements.txt
+sudo -u openclaw /opt/openclaw-bot-${INSTANCE}/venv/bin/pip install -r /opt/openclaw-bot-${INSTANCE}/requirements.txt -q
+sudo systemctl restart "openclaw-discord-bot@${INSTANCE}"
+```
+
+Repeat for each bot instance on that VPS.
+
 ### Jetson (runner with systemd)
 
 From the **repo root** on the Jetson:
@@ -104,5 +129,6 @@ Remove `.github/workflows/deploy-vps.yml`, or delete the `DEPLOY_ENABLED` variab
 |-------------|----------------------------|--------------------|
 | GitHub      | Run tests                  | CI workflow (automatic) |
 | VPS         | Update broker + bots       | `deploy/scripts/update_vps.sh` or deploy workflow |
+| VPS (bot only) | Update bot instances only | `git pull`, then refresh and restart each `openclaw-discord-bot@<instance>` |
 | Jetson      | Update runner              | `deploy/scripts/update_runner_jetson.sh` |
 | WSL         | Update runner (+ restart)  | `deploy/scripts/update_runner_wsl.sh` then restart runner |
