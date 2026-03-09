@@ -167,6 +167,15 @@ if [[ "$BUILD_FROM_SOURCE" == true ]]; then
     git submodule update --remote vendor/llama.cpp
   fi
   
+  # Patch mtmd CMakeLists.txt to fix build error
+  MTMD_CMAKELISTS="$SOURCE_DIR/llama-cpp-python/vendor/llama.cpp/tools/mtmd/CMakeLists.txt"
+  if [[ -f "$MTMD_CMAKELISTS" ]]; then
+    echo "[setup_llama_cpp] Patching mtmd CMakeLists.txt to fix build error..."
+    # The error is due to PUBLIC_HEADER being set to an empty or invalid value
+    # Remove or fix the PUBLIC_HEADER property that's causing issues
+    sed -i '/PUBLIC_HEADER.*mtmd.h/d' "$MTMD_CMAKELISTS" 2>/dev/null || true
+  fi
+  
   # Build and install
   echo "[setup_llama_cpp] Building llama-cpp-python from source..."
   cd "$SOURCE_DIR/llama-cpp-python"
@@ -174,8 +183,12 @@ if [[ "$BUILD_FROM_SOURCE" == true ]]; then
   # Set build environment
   export FORCE_CMAKE=1
   # Allow user to set CMAKE_ARGS for CUDA, etc.
+  # Add -DLLAVA_BUILD=OFF to disable problematic llava/mtmd builds
   if [[ -n "$CMAKE_ARGS" ]]; then
-    echo "[setup_llama_cpp] Using CMAKE_ARGS: $CMAKE_ARGS"
+    echo "[setup_llama_cpp] Using CMAKE_ARGS: $CMAKE_ARGS -DLLAVA_BUILD=OFF"
+    export CMAKE_ARGS="$CMAKE_ARGS -DLLAVA_BUILD=OFF"
+  else
+    export CMAKE_ARGS="-DLLAVA_BUILD=OFF"
   fi
   
   # Install the package
