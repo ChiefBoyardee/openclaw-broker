@@ -41,3 +41,9 @@ htmlcov/
 *.swp
 .DS_Store
 Thumbs.db
+
+# Local WSL setup documentation (contains environment-specific paths)
+WSL_SETUP.md
+
+# Cursor rules - machine-specific WSL context
+.cursor/rules/
