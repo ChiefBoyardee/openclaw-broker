@@ -13,8 +13,11 @@
 #   - /opt/models/                (model storage directory; or ~/.local/share/openclaw-models in --user mode)
 #   - systemd service (if --systemd flag provided)
 #
-# Note: --build-from-source is required for Qwen3.5 models as pip releases lag
-# behind llama.cpp. See: https://github.com/abetlen/llama-cpp-python/issues/2008
+# IMPORTANT: --build-from-source uses the JamePeng fork which maintains
+# synchronized API bindings with latest llama.cpp. The main abetlen repo
+# has outdated bindings causing "undefined symbol: llama_get_kv_self" errors
+# when used with newer llama.cpp versions (required for Qwen3.5 models).
+# See: https://github.com/abetlen/llama-cpp-python/issues/2074
 
 set -e
 
@@ -154,9 +157,21 @@ if [[ "$BUILD_FROM_SOURCE" == true ]]; then
   if [[ -d "$SOURCE_DIR/llama-cpp-python/.git" ]]; then
     echo "[setup_llama_cpp] Updating existing llama-cpp-python source..."
     cd "$SOURCE_DIR/llama-cpp-python"
-    git fetch origin
-    git checkout main || git checkout master
-    git pull
+    
+    # Check if we need to switch remotes (from abetlen to JamePeng fork)
+    CURRENT_REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
+    if [[ "$CURRENT_REMOTE" == *"abetlen"* ]]; then
+      echo "[setup_llama_cpp] Switching to JamePeng fork for API compatibility..."
+      git remote set-url origin https://github.com/JamePeng/llama-cpp-python.git
+      git fetch origin
+      git checkout main || git checkout master
+      git reset --hard origin/main 2>/dev/null || git reset --hard origin/master
+    else
+      git fetch origin
+      git checkout main || git checkout master
+      git pull
+    fi
+    
     git submodule update --remote vendor/llama.cpp
   else
     echo "[setup_llama_cpp] Cloning llama-cpp-python repository..."

@@ -333,19 +333,34 @@ update_llama_cpp() {
     if [[ "$install_type" == "source" && -d "$llama_dir/src/llama-cpp-python" ]]; then
       log "Updating source-built llama-cpp-python..."
       cd "$llama_dir/src/llama-cpp-python"
-      
+
+      # Check if we need to switch remotes (from abetlen to JamePeng fork)
+      CURRENT_REMOTE=$(git remote get-url origin 2>/dev/null || echo "")
+      if [[ "$CURRENT_REMOTE" == *"abetlen"* ]]; then
+        log "Switching to JamePeng fork for API compatibility..."
+        log "See: https://github.com/abetlen/llama-cpp-python/issues/2074"
+        git remote set-url origin https://github.com/JamePeng/llama-cpp-python.git
+        git fetch origin
+        git checkout main 2>/dev/null || git checkout master 2>/dev/null || true
+        git reset --hard origin/main 2>/dev/null || git reset --hard origin/master 2>/dev/null || true
+      fi
+
       # Fetch latest and update submodule
       log "Fetching latest llama-cpp-python..."
       git fetch origin
       git checkout main 2>/dev/null || git checkout master 2>/dev/null || true
       git pull
-      
+
       log "Updating llama.cpp submodule to latest..."
       git submodule update --remote vendor/llama.cpp
-      
+
       # Rebuild
       log "Rebuilding from source..."
       export FORCE_CMAKE=1
+      # Ensure we use the correct CMAKE_ARGS if not set
+      if [[ -z "$CMAKE_ARGS" ]]; then
+        export CMAKE_ARGS="-DLLAVA_BUILD=OFF"
+      fi
       "$llama_dir/venv/bin/pip" install . --upgrade --force-reinstall --no-cache-dir -q
       log "llama-cpp-python updated from source"
     else

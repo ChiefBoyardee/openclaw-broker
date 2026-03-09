@@ -81,9 +81,25 @@ CMAKE_ARGS="-DGGML_CUDA=ON" ./deploy/scripts/setup_llama_cpp.sh --build-from-sou
 ```
 
 **What this does:**
-- Clones the llama-cpp-python repository
+- Clones the JamePeng llama-cpp-python fork (maintains synchronized API with latest llama.cpp)
 - Updates the llama.cpp submodule to the latest commit (includes qwen35)
-- Builds and installs from source
+- Builds and installs from source with proper API compatibility
+
+**Why the JamePeng fork?**
+The main abetlen repository has outdated Python bindings that cause `undefined symbol: llama_get_kv_self` errors when built against the latest llama.cpp. The JamePeng fork maintains synchronized API names with upstream llama.cpp (see [abetlen/llama-cpp-python#2074](https://github.com/abetlen/llama-cpp-python/issues/2074) and [abetlen/llama-cpp-python#1901](https://github.com/abetlen/llama-cpp-python/pull/1901)).
+
+**Build requirements:**
+- `git`, `cmake`, and a C++ compiler
+- For CUDA: NVIDIA drivers and CUDA toolkit
+- Build time: 5-10 minutes depending on system
+
+**Required CMAKE_ARGS:**
+The build automatically includes `-DLLAVA_BUILD=OFF` to avoid a known CMake bug in llama.cpp's mtmd/llava tools. For CUDA support, also add `-DGGML_CUDA=ON`:
+
+```bash
+export CMAKE_ARGS="-DGGML_CUDA=ON -DLLAVA_BUILD=OFF"
+./deploy/scripts/setup_llama_cpp.sh --build-from-source
+```
 
 **Auto-updates for source builds:**
 The `auto_update.sh` script can update source-built installations:
@@ -93,7 +109,15 @@ The `auto_update.sh` script can update source-built installations:
 
 This will fetch the latest llama.cpp changes and rebuild automatically.
 
-**Note:** Building from source requires `git`, `cmake`, and a C++ compiler. The build may take 5-10 minutes depending on your system.
+**Troubleshooting:**
+
+| Error | Solution |
+|-------|----------|
+| `unknown model architecture: qwen35` | Use `--build-from-source` flag |
+| `undefined symbol: llama_get_kv_self` | The main repo has API mismatch. The setup script now uses JamePeng fork which fixes this. Re-run with `--build-from-source`. |
+| `set_target_properties` CMake error | Already patched in setup script via `-DLLAVA_BUILD=OFF` |
+| `Permission denied` on scripts | Run `chmod +x deploy/scripts/*.sh` |
+| `syntax error near unexpected token` | CRLF line endings from Windows. Run `sed -i 's/\r$//' deploy/scripts/script.sh` |
 
 See the llama.cpp setup script for model download options, GPU layer configuration, and systemd service installation.
 
