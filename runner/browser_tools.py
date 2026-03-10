@@ -20,7 +20,7 @@ from dataclasses import dataclass, asdict
 # Browser configuration
 BROWSER_HEADLESS = os.environ.get("BROWSER_HEADLESS", "true").lower() == "true"
 BROWSER_TIMEOUT = int(os.environ.get("BROWSER_TIMEOUT", "30000"))
-BROWSER_MAX_CONTENT_LENGTH = int(os.environ.get("BROWSER_MAX_CONTENT_LENGTH", "50000"))
+BROWSER_MAX_CONTENT_LENGTH = int(os.environ.get("BROWSER_MAX_CONTENT_LENGTH", "4000"))
 
 # Track browser state (singleton pattern)
 _browser_state: Optional[Dict[str, Any]] = None
