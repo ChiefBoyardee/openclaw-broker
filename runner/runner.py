@@ -354,7 +354,7 @@ def main():
             logger.info(f"claimed job id={job_id} command={command}")
 
             try:
-                result = run_job(command, payload)
+                result = run_job(command, payload, job_id)
                 if should_redact_output():
                     result = redact_output(result)
                 ok = _post_with_retry(
@@ -425,7 +425,7 @@ def _embed_text(text: str) -> dict:
     }
 
 
-def run_job(command: str, payload: str) -> str:
+def run_job(command: str, payload: str, job_id: str = "") -> str:
     """Execute the job and return result string (plain or JSON string)."""
     if command == "ping":
         return f"pong: {payload}"
@@ -584,13 +584,15 @@ def run_job(command: str, payload: str) -> str:
             max_steps = 1
         # Check if streaming mode is requested
         streaming = payload_obj.get("streaming", False) or LLM_MODE == "agentic_streaming"
-        job_id = payload_obj.get("job_id")  # Required for streaming
+
+        # Use job_id from payload or from the job parameter (for runner-claimed jobs)
+        job_id_for_streaming = payload_obj.get("job_id") or job_id
 
         # Create streaming client if in streaming mode
         stream_client = None
-        if streaming and job_id:
-            stream_client = create_stream_client(job_id)
-            logger.info(f"Streaming mode enabled for job {job_id}")
+        if streaming and job_id_for_streaming:
+            stream_client = create_stream_client(job_id_for_streaming)
+            logger.info(f"Streaming mode enabled for job {job_id_for_streaming}")
 
         # Bridge for tool_registry.dispatch: methods + allowed_tools, worker_id
         # Import browser tools
@@ -730,8 +732,9 @@ def run_job(command: str, payload: str) -> str:
         if not prompt:
             raise ValueError("llm_agentic payload must include prompt")
 
-        job_id = payload_obj.get("job_id")
-        if not job_id:
+        # Use job_id from payload or from the job parameter
+        job_id_for_streaming = payload_obj.get("job_id") or job_id
+        if not job_id_for_streaming:
             raise ValueError("llm_agentic requires job_id for streaming")
 
         config = get_llm_config()
@@ -747,9 +750,9 @@ def run_job(command: str, payload: str) -> str:
             max_steps = 1
 
         # Create streaming client
-        stream_client = create_stream_client(job_id)
+        stream_client = create_stream_client(job_id_for_streaming)
         if not stream_client.enabled:
-            logger.warning(f"Streaming not enabled for job {job_id}, falling back to standard mode")
+            logger.warning(f"Streaming not enabled for job {job_id_for_streaming}, falling back to standard mode")
 
         # Post initial message
         stream_client.post_message("Starting agentic task...", "info")
