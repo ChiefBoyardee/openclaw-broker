@@ -213,14 +213,14 @@ def _extract_interactive_elements(page) -> List[Dict[str, Any]]:
 
 def browser_navigate(url: str, wait_for_load: bool = True) -> str:
     """
-    Navigate to a URL.
+    Navigate to a URL and extract page content.
     
     Args:
         url: The URL to navigate to
         wait_for_load: Whether to wait for page load
     
     Returns:
-        JSON string with navigation result
+        JSON string with navigation result including page content
     """
     try:
         state = _init_browser()
@@ -238,11 +238,17 @@ def browser_navigate(url: str, wait_for_load: bool = True) -> str:
         state["session"].current_url = page.url
         state["session"].page_title = page.title()
         
+        # Auto-extract page content so the LLM gets useful text in one call
+        content = _extract_text_content(page)
+        content, truncated = _truncate_content(content)
+        
         result = {
             "success": True,
             "url": page.url,
             "title": page.title(),
-            "message": f"Navigated to {page.url}"
+            "content": content,
+            "truncated": truncated,
+            "message": f"Navigated to {page.url} and extracted content ({len(content)} chars)"
         }
         return json.dumps(result)
         
