@@ -10,6 +10,8 @@ This module provides:
 
 import os
 import time
+import asyncio
+import json
 from typing import Optional, Dict, Callable
 from dataclasses import dataclass
 import logging
@@ -125,6 +127,104 @@ class ChatManager:
             del self.sessions[conversation_id]
             
             logger.info(f"Ended chat session: {conversation_id}")
+            
+    async def _process_memory_background(self, user_id: str, conversation_id: str):
+        """Asynchronously process conversation history to extract, update, or remove facts using LLM."""
+        try:
+            # Gather last 10 messages for context
+            messages = self.memory.get_recent_messages(conversation_id, limit=10)
+            if len(messages) < 3:
+                return  # Not enough context to process
+                
+            # Gather current user knowledge
+            knowledge = self.memory.get_user_knowledge(user_id, limit=30)
+            knowledge_text = "Current User Facts:\n" + "\n".join([f"[{fact.id}] {fact.fact_type}: {fact.content}" for fact in knowledge])
+            
+            chat_text = "Recent Conversation:\n" + "\n".join([f"{msg.role}: {msg.content}" for msg in messages])
+            
+            prompt = (
+                "You are an intelligent memory curation assistant. Your job is to analyze the recent conversation "
+                "and maintain the user's permanent memory profile.\n\n"
+                f"{knowledge_text}\n\n"
+                f"{chat_text}\n\n"
+                "INSTRUCTIONS:\n"
+                "1. If the user stated a new fact (e.g. name, favorite color, location, preference), extract it.\n"
+                "2. If the user corrected a previous fact or changed their mind (e.g. 'I actually like blue now, not red', 'I moved to NYC'), "
+                "you MUST identify the ID of the old incorrect fact to remove it, and add the new correct fact.\n"
+                "3. If nothing substantial needs to be remembered, return empty lists.\n\n"
+                "You MUST respond ONLY with a raw JSON object containing 'add' (list of dicts with 'fact_type' and 'content') "
+                "and 'remove' (list of IDs to remove). Do not include any markdown or explanation.\n"
+                "Example Format:\n"
+                '{"add": [{"fact_type": "favorite_color", "content": "My favorite color is green"}], "remove": [4]}'
+            )
+            
+            # Send to LLM
+            broker_url = getattr(self.bot, 'broker_url', self.broker_url)
+            bot_token = getattr(self.bot, 'bot_token', self.bot_token)
+            
+            import requests
+            r = await asyncio.to_thread(
+                requests.post,
+                f"{broker_url}/jobs",
+                headers={"X-Bot-Token": bot_token},
+                json={"command": "llm_task", "payload": json.dumps({"prompt": prompt, "temperature": 0.1})},
+                timeout=10
+            )
+            r.raise_for_status()
+            job = r.json()
+            job_id = job.get("id")
+            
+            if not job_id:
+                return
+                
+            # Poll for result
+            for _ in range(60): # 1 minute max polling
+                await asyncio.sleep(1.0)
+                r = await asyncio.to_thread(
+                    requests.get,
+                    f"{broker_url}/jobs/{job_id}",
+                    headers={"X-Bot-Token": bot_token},
+                    timeout=5
+                )
+                if r.status_code != 200:
+                    continue
+                job_status = r.json()
+                if job_status.get("status") == "done":
+                    result_str = job_status.get("result", "{}")
+                    try:
+                        # Extract final text
+                        parsed = json.loads(result_str)
+                        if isinstance(parsed, dict) and "final" in parsed:
+                            result_str = parsed["final"]
+                            
+                        # Strip markdown if present
+                        if result_str.startswith("```json"):
+                            result_str = result_str[7:-3].strip()
+                        elif result_str.startswith("```"):
+                            result_str = result_str[3:-3].strip()
+                            
+                        data = json.loads(result_str)
+                        
+                        # Process removals
+                        removals = data.get("remove", [])
+                        if removals:
+                            self.memory.remove_user_facts(user_id, [int(i) for i in removals])
+                            logger.info(f"Memory Curate: Removed facts {removals} for user {user_id}")
+                            
+                        # Process additions
+                        additions = data.get("add", [])
+                        for fact in additions:
+                            if "fact_type" in fact and "content" in fact:
+                                self.memory.add_user_fact(user_id, fact["fact_type"], fact["content"], confidence=0.8)
+                                logger.info(f"Memory Curate: Added '{fact['content']}' for user {user_id}")
+                                
+                    except (json.JSONDecodeError, ValueError) as json_err:
+                        logger.warning(f"Failed to parse memory extraction JSON: {json_err} - raw: {result_str}")
+                    break
+                elif job_status.get("status") == "failed":
+                    break
+        except Exception as e:
+            logger.error(f"Background memory loop error: {e}")
     
     async def handle_chat_message(self, message_content: str, user_id: str,
                                   channel_id: str, username: str,
@@ -253,6 +353,10 @@ class ChatManager:
             session.message_count += 1
             session.last_activity = time.time()
             self.personality.increment_turn(user_id)
+            
+            # Spin off background memory extraction every 3 turns
+            if session.message_count % 3 == 0:
+                asyncio.create_task(self._process_memory_background(user_id, session.conversation_id))
             
             return response
             

@@ -341,6 +341,42 @@ async def _run_job_and_reply(
             state["active_jobs"].discard(job_id)
 
 
+async def reply_in_chunks(message: discord.Message, text: str):
+    """Split text into chunks if it exceeds Discord's 2000-character limit."""
+    if not text:
+        return
+    
+    chunk_size = 1900
+    chunks = []
+    current_chunk = ""
+    
+    for line in text.split('\n'):
+        if len(current_chunk) + len(line) + 1 > chunk_size:
+            if current_chunk:
+                chunks.append(current_chunk)
+                current_chunk = line + "\n"
+            else:
+                # A single line is longer than chunk_size, hard split
+                while len(line) > chunk_size:
+                    chunks.append(line[:chunk_size])
+                    line = line[chunk_size:]
+                current_chunk = line + "\n"
+        else:
+            current_chunk += line + "\n"
+            
+    if current_chunk:
+        chunks.append(current_chunk)
+        
+    for i, chunk in enumerate(chunks):
+        chunk_str = chunk.strip()
+        if not chunk_str:
+            continue
+        if i == 0:
+            await message.reply(chunk_str)
+        else:
+            await message.channel.send(chunk_str)
+
+
 @client.event
 async def on_message(message: discord.Message):
     if message.author.bot:
@@ -546,17 +582,17 @@ async def on_message(message: discord.Message):
                 await message.reply("Start a conversation! Usage: `chat <your message>`")
                 return
             response = await handle_chat_command(bot_instance(), message, payload)
-            await message.reply(response)
+            await reply_in_chunks(message, response)
             return
 
         if cmd == "persona":
             response = await handle_persona_command(bot_instance(), message, payload)
-            await message.reply(response)
+            await reply_in_chunks(message, response)
             return
 
         if cmd == "memory":
             response = await handle_memory_command(bot_instance(), message, payload)
-            await message.reply(response)
+            await reply_in_chunks(message, response)
             return
 
         if cmd == "remember":
@@ -564,55 +600,72 @@ async def on_message(message: discord.Message):
                 await message.reply("What should I remember? Usage: `remember <fact>`")
                 return
             response = await handle_remember_command(bot_instance(), message, payload)
-            await message.reply(response)
+            await reply_in_chunks(message, response)
             return
 
         if cmd == "history":
             response = await handle_history_command(bot_instance(), message, payload)
-            await message.reply(response)
+            await reply_in_chunks(message, response)
             return
 
-    # Build help message
-    help_lines = [
-        "Unknown command. Available commands:",
-        "",
-        "**Job Commands:**",
-        "`ping <text>` - Test connectivity",
-        "`capabilities` - Show worker capabilities",
-        "`plan <text>` - Create execution plan",
-        "`approve <plan_id>` - Approve a plan",
-        "`status <job_id>` - Check job status",
-        "",
-        "**Repository Commands:**",
-        "`repos` - List available repos",
-        "`repostat <repo>` - Get repo status",
-        "`last <repo>` - Show last commit",
-        "`grep <repo> <query> [path]` - Search repo",
-        "`cat <repo> <path> [start] [end]` - Read file",
-        "",
-        "**LLM Commands:**",
-        "`ask <prompt>` - Ask LLM (one-shot)",
-        "`urgo <prompt>` - Urgent LLM request",
-    ]
+    # Explicit help command
+    if cmd in ("help", "commands"):
+        help_lines = [
+            "**Available Commands:**",
+            "",
+            "**Job Commands:**",
+            "`ping <text>` - Test connectivity",
+            "`capabilities` - Show worker capabilities",
+            "`plan <text>` - Create execution plan",
+            "`approve <plan_id>` - Approve a plan",
+            "`status <job_id>` - Check job status",
+            "",
+            "**Repository Commands:**",
+            "`repos` - List available repos",
+            "`repostat <repo>` - Get repo status",
+            "`last <repo>` - Show last commit",
+            "`grep <repo> <query> [path]` - Search repo",
+            "`cat <repo> <path> [start] [end]` - Read file",
+            "",
+            "**LLM Commands:**",
+            "`ask <prompt>` - Ask LLM (one-shot)",
+            "`urgo <prompt>` - Urgent LLM request",
+        ]
 
-    if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
+        if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
+            help_lines.extend([
+                "",
+                "**Conversation Commands:**",
+                "`persona [name]` - Switch personality",
+                "`memory [status/clear/on/off]` - Memory management",
+                "`remember <fact>` - Remember a fact",
+                "`history [n]` - Show conversation history",
+                "",
+                "*(You don't need to use a command to talk to me—just say anything!)*",
+            ])
+
         help_lines.extend([
             "",
-            "**Chat Commands:**",
-            "`chat <message>` - Conversational mode with memory",
-            "`persona [name]` - Switch personality",
-            "`memory [status/clear/on/off]` - Memory management",
-            "`remember <fact>` - Remember a fact",
-            "`history [n]` - Show conversation history",
+            "**Info:**",
+            "`whoami` - Show bot info",
         ])
 
-    help_lines.extend([
-        "",
-        "**Info:**",
-        "`whoami` - Show bot info",
-    ])
+        await message.reply("\n".join(help_lines))
+        return
 
-    await message.reply("\n".join(help_lines))
+    # Fallback: treat unrecognized text as a natural conversational message
+    if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
+        try:
+            # Pass the entire original text as the message content
+            response = await handle_chat_command(bot_instance(), message, text)
+            await reply_in_chunks(message, response)
+        except Exception as e:
+            logger.exception(f"Error handling natural chat: {e}")
+            await message.reply("I'm having trouble thinking right now...")
+        return
+
+    # If memory is off and no known command matched
+    await message.reply(f"Unknown command: `{cmd}`. Type `help` for a list of commands.")
 
 
 # Global bot instance reference for chat commands

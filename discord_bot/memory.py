@@ -474,6 +474,18 @@ class ConversationMemory:
         
         self.db.commit()
     
+    def remove_user_facts(self, user_id: str, fact_ids: List[int]):
+        """Remove previously stored facts for a user by their IDs."""
+        if not fact_ids:
+            return
+            
+        placeholders = ','.join('?' * len(fact_ids))
+        self.db.execute(f"""
+            DELETE FROM user_knowledge
+            WHERE user_id = ? AND id IN ({placeholders})
+        """, [user_id] + fact_ids)
+        self.db.commit()
+    
     def get_conversation_context(self, conversation_id: str, user_id: str,
                                   query: str = None,
                                   max_tokens: int = 2000) -> Dict[str, Any]:
