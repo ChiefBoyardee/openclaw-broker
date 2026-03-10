@@ -1212,7 +1212,7 @@ async def handle_chat_command(bot, message, args: str, intent_result=None, enabl
         enable_tools: Whether to enable tool descriptions in system prompt
     """
     if not args:
-        return "Start a conversation with me! Usage: `chat <your message>`"
+        return "Start a conversation with me! Just type your message naturally."
 
     # Get broker URL and token from bot
     broker_url = getattr(bot, 'broker_url', os.environ.get("BROKER_URL", "http://127.0.0.1:8000"))

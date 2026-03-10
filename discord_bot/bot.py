@@ -588,96 +588,6 @@ async def on_message(message: discord.Message):
         )
         return
 
-    if cmd in ("ask", "urgo"):
-        if not payload:
-            await message.reply("Usage: `ask <prompt>` or `urgo <prompt>`")
-            return
-
-        prompt_text = payload.strip()
-
-        # Check for forced routing (vllm/jetson)
-        requires = None
-        pl = prompt_text.lower()
-
-        if pl.startswith("vllm:") or pl.startswith("vllm ") or " preferred vllm" in pl:
-            # Strip prefix for vllm routing
-            if pl.startswith("vllm:"):
-                prompt_text = prompt_text[5:].lstrip()
-            elif pl.startswith("vllm "):
-                prompt_text = prompt_text[5:].lstrip()
-            else:
-                prompt_text = _strip_phrase_any_case(prompt_text, " preferred vllm")
-            requires = '{"caps":["llm:vllm"]}'
-
-        elif pl.startswith("jetson:") or pl.startswith("jetson ") or " preferred jetson" in pl:
-            # Strip prefix for jetson routing
-            if pl.startswith("jetson:"):
-                prompt_text = prompt_text[7:].lstrip()
-            elif pl.startswith("jetson "):
-                prompt_text = prompt_text[7:].lstrip()
-            else:
-                prompt_text = _strip_phrase_any_case(prompt_text, " preferred jetson")
-            requires = '{"caps":["llm:jetson"]}'
-
-        if not prompt_text:
-            await message.reply("Please provide a prompt after the routing prefix.")
-            return
-
-        # Route through agentic mode by default for full tool autonomy
-        if HAS_AGENTIC_MODE and AGENTIC_MODE:
-            try:
-                logger.info(f"Using AGENTIC MODE for ask/urgo command - full tool autonomy")
-                await handle_agentic_command(message, prompt_text)
-            except Exception as e:
-                logger.exception(f"Error in agentic ask/urgo: {e}")
-                # Fall back to traditional job-based approach on error
-                await _run_job_and_reply(
-                    message,
-                    "llm_task",
-                    json.dumps({"prompt": prompt_text}),
-                    reply_prefix="LLM job: ",
-                    parse_json=True,
-                    requires=requires,
-                )
-        elif HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
-            try:
-                # Fallback to conversational handler if agentic not available
-                intent_result = None
-                if HAS_NL_ROUTER:
-                    intent_result = detect_intent(prompt_text)
-                    logger.info(f"Ask/Urgo intent detected: {intent_result.intent} "
-                               f"for user {message.author.id}")
-
-                async with message.channel.typing():
-                    response = await handle_chat_command(
-                        bot_instance(), message, prompt_text,
-                        intent_result=intent_result,
-                        enable_tools=True if intent_result and intent_result.confidence > 0.5 else False
-                    )
-                await reply_in_chunks(message, response)
-            except Exception as e:
-                logger.exception(f"Error in conversational ask/urgo: {e}")
-                # Fall back to traditional job-based approach on error
-                await _run_job_and_reply(
-                    message,
-                    "llm_task",
-                    json.dumps({"prompt": prompt_text}),
-                    reply_prefix="LLM job: ",
-                    parse_json=True,
-                    requires=requires,
-                )
-        else:
-            # Fallback to traditional job-based approach if conversation features disabled
-            await _run_job_and_reply(
-                message,
-                "llm_task",
-                json.dumps({"prompt": prompt_text}),
-                reply_prefix="LLM job: ",
-                parse_json=True,
-                requires=requires,
-            )
-        return
-
     if cmd == "whoami":
         bot_id = str(client.user.id) if client.user else "?"
         broker_display = whoami_broker_url_display(BROKER_URL, WHOAMI_BROKER_URL_MODE)
@@ -725,7 +635,7 @@ async def on_message(message: discord.Message):
                 "- Multi-turn tool loops\n"
                 "- Intermediate progress updates\n"
                 "- Discord-native interactions\n\n"
-                "Or use `ask <request>` with high-confidence tool intents to auto-trigger agentic mode."
+                "Natural language requests with tool intents will auto-trigger agentic mode."
             )
             return
 
@@ -734,15 +644,6 @@ async def on_message(message: discord.Message):
 
     # --- Conversational/Chat Commands ---
     if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
-        if cmd == "chat":
-            if not payload:
-                await message.reply("Start a conversation! Usage: `chat <your message>`")
-                return
-            async with message.channel.typing():
-                response = await handle_chat_command(bot_instance(), message, payload)
-            await reply_in_chunks(message, response)
-            return
-
         if cmd == "persona":
             async with message.channel.typing():
                 response = await handle_persona_command(bot_instance(), message, payload)
@@ -810,10 +711,6 @@ async def on_message(message: discord.Message):
             "`last <repo>` - Show last commit",
             "`grep <repo> <query> [path]` - Search repo",
             "`cat <repo> <path> [start] [end]` - Read file",
-            "",
-            "**LLM Commands:**",
-            "`ask <prompt>` - Ask LLM (one-shot)",
-            "`urgo <prompt>` - Urgent LLM request",
             "",
             "**Website Commands:**",
             "`website init` - Initialize AI website",
@@ -1069,7 +966,7 @@ async def _handle_natural_github_command(message: discord.Message, intent_result
             "- Which repository?\n"
             "- What's the issue title?\n"
             "- Description of the issue?\n\n"
-            "Or you can use: `ask Create an issue in repo 'name' titled 'title'`"
+            "Or use agentic mode: `agentic Create an issue in repo 'name' titled 'title'`"
         )
     elif "list" in text_lower and "repos" in text_lower:
         await message.reply(
@@ -1149,7 +1046,7 @@ async def _show_extended_help(message: discord.Message):
 
 **Conversational:**
 - Just chat with me naturally - I remember our conversations!
-- Ask me anything - I'll do my best to help
+- All interactions maintain persistent personality and context
 
 **Agentic Mode (Streaming):**
 - `agentic <request>` - Multi-turn streaming with tool calling

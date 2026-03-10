@@ -49,18 +49,18 @@ pip install sentence-transformers
 
 In Discord:
 ```
-chat Hi there! Remember I like Python
+Hi there! Remember I like Python
 ```
 
 ## Discord Commands
 
-### `chat <message>`
-Start or continue a conversation with persistent memory.
+### Natural Language (No Command Needed)
+Just type naturally - the bot understands conversation and maintains persistent memory automatically.
 
 ```
-chat Hello!
-chat What was I working on yesterday?
-chat Remember that I prefer dark mode
+Hello!
+What was I working on yesterday?
+Remember that I prefer dark mode
 ```
 
 ### `persona [name]`
@@ -431,16 +431,16 @@ context = memory.get_conversation_context(
 persona = personality.get_persona('sassy_bot')
 ```
 
-## Migration from Ask Command
+## Using Conversational Features
 
-The existing `ask` command remains unchanged for one-shot queries. For conversations with memory, use `chat`:
+All conversations now maintain persistent personality and context:
 
-| Use Case | Command |
-|----------|---------|
-| Quick question | `ask How do I X?` |
-| Tool-intensive task | `ask llamacpp: grep for Y` |
-| Conversation with memory | `chat Let's discuss Z...` |
-| Coding with context | `chat Remember I use Python...` |
+| Use Case | How |
+|----------|-----|
+| Natural chat | Just type naturally - no command needed |
+| Tool-intensive task | `agentic <request>` with routing hints |
+| Conversation with memory | Just start typing - memory is automatic |
+| Coding with context | "Remember I use Python..." |
 
 ## References
 

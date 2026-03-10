@@ -10,13 +10,13 @@ This report provides a top-to-bottom review of the openclaw-broker repository: d
 
 OpenClaw Broker is a small job-queue system that connects a Discord bot to one or more workers (runners). End-to-end flow:
 
-1. **Discord** — Allowlisted users send commands (e.g. `ping`, `ask <prompt>`, `repos`, `cat <repo> <path>`) via DM or an allowed channel.
+1. **Discord** — Allowlisted users send commands (e.g. `ping`, `agentic <request>`, `repos`, `cat <repo> <path>`) or just chat naturally via DM or an allowed channel.
 2. **Discord bot** — Parses the command, creates a job via `POST /jobs` with `X-Bot-Token`, and waits for the result by polling `GET /jobs/{id}` until the job is done, failed, or a timeout is reached.
 3. **Broker** — FastAPI service with a SQLite-backed queue. It accepts job creation (bot) and job claim/result/fail (workers). On `GET /jobs/next`, it atomically requeues stale running jobs (lease expired), then assigns the oldest queued job that matches the worker’s capabilities (caps). Workers identify themselves with `X-Worker-Token` and optional `X-Worker-Caps`.
 4. **Runner(s)** — Long-poll `GET /jobs/next`, execute the command (e.g. `ping`, `capabilities`, `repo_list`, `repo_status`, `repo_grep`, `repo_readfile`, `plan_echo`, `approve_echo`, `llm_task`), then `POST /jobs/{id}/result` or `POST /jobs/{id}/fail`. For `llm_task`, the runner runs an LLM tool loop (OpenAI-compatible API + tool registry) and returns a result envelope.
 5. **LLM** — Used only by the runner for `llm_task`. The runner calls an OpenAI-compatible endpoint (e.g. vLLM) with tools (repo read-only tools + plan_echo/approve_echo). Config (base URL, model, API key) lives in the runner’s environment only.
 
-Multi-worker routing is done by **caps**: jobs can require `{"caps": ["llm:vllm"]}` or `["llm:jetson"]`; only workers advertising those caps can claim them. The Discord `ask`/`urgo` commands can force routing with prefixes like `ask vllm: ...` or `ask jetson: ...`.
+Multi-worker routing is done by **caps**: jobs can require `{"caps": ["llm:vllm"]}` or `["llm:jetson"]`; only workers advertising those caps can claim them. Natural language requests can include routing hints like "preferred vllm" or "preferred jetson" to force routing.
 
 ### What’s working well
 
@@ -124,12 +124,12 @@ Secrets live only in env files: `broker.env`, `bot.env` (per instance), `runner.
 
 | Aspect | Details |
 |--------|---------|
-| **Responsibilities** | Parse user messages; map to commands (ping, capabilities, plan, approve, status, repos, repostat, last, grep, cat, ask/urgo, whoami); create job and wait for result; enforce allowlist and channel; enforce per-user cooldown and max concurrent; redact tokens in all replies. |
+| **Responsibilities** | Parse user messages; map to commands (ping, capabilities, plan, approve, status, repos, repostat, last, grep, cat, chat, agentic, whoami); create job and wait for result; enforce allowlist and channel; enforce per-user cooldown and max concurrent; redact tokens in all replies. |
 | **Key interfaces** | `create_job(command, payload, requires)`, `get_job(job_id)`, `wait_for_job_result(job_id)` (poll with backoff). Broker timeouts: connect 5s, read 15s. |
 | **Authentication** | Discord token for API; allowlist from `ALLOWED_USER_ID` and `ALLOWLIST_USER_ID` (at least one required); optional `ALLOWED_CHANNEL_ID` (else DMs only). Bot uses `BOT_TOKEN` for broker. |
 | **Failure handling and idempotency** | All user-facing strings passed through `redact()` (BOT_TOKEN, DISCORD_TOKEN replaced with `***`). Truncation for display. On broker errors, reply with redacted error message. |
 | **Important config/env** | `DISCORD_TOKEN`, `BOT_TOKEN`, `BROKER_URL`, `ALLOWED_USER_ID`, `ALLOWLIST_USER_ID`, `ALLOWED_CHANNEL_ID`, `JOB_POLL_INTERVAL_SEC`, `JOB_POLL_TIMEOUT_SEC`, `BOT_COOLDOWN_SECONDS`, `BOT_MAX_CONCURRENT`, `INSTANCE_NAME`. |
-| **Notable implementation details** | **Allowlist**: Union of single `ALLOWED_USER_ID` and comma/space-separated `ALLOWLIST_USER_ID`. **Rate limits**: Per-user cooldown (`BOT_COOLDOWN_SECONDS`), max concurrent jobs (`BOT_MAX_CONCURRENT`). **Caps routing**: `ask vllm: ...` / `ask jetson: ...` set `requires` to `{"caps":["llm:vllm"]}` or `["llm:jetson"]`. **whoami** returns instance name, bot user ID, broker URL, and allowlist summary; broker URL is not redacted (optional improvement if URL is sensitive). |
+| **Notable implementation details** | **Allowlist**: Union of single `ALLOWED_USER_ID` and comma/space-separated `ALLOWLIST_USER_ID`. **Rate limits**: Per-user cooldown (`BOT_COOLDOWN_SECONDS`), max concurrent jobs (`BOT_MAX_CONCURRENT`). **Caps routing**: routing hints like "preferred vllm" or "preferred jetson" set `requires` to `{"caps":["llm:vllm"]}` or `["llm:jetson"]`. **whoami** returns instance name, bot user ID, broker URL, and allowlist summary; broker URL is not redacted (optional improvement if URL is sensitive). |
 
 ### D) Deploy scripts and systemd templates
 
@@ -272,7 +272,7 @@ No full E2E (Discord API + broker + runner) or integration test that runs real b
 
 ### Documentation vs code
 
-- **README** (Components table and Runner section): Lists Discord commands including `ask` and `urgo`; runner command list remains as-is (llm_task documented in MULTI_WORKER_LLM_SMOKE). Caps logic is in `bbroker/caps.py` (Sprint 1).
+- **README** (Components table and Runner section): Lists Discord commands including natural language support and `agentic`; runner command list remains as-is (llm_task documented in MULTI_WORKER_LLM_SMOKE). Caps logic is in `bbroker/caps.py` (Sprint 1).
 
 ---
 
@@ -322,9 +322,9 @@ No full E2E (Discord API + broker + runner) or integration test that runs real b
 
 ### Commands exposed to Discord
 
-- ping, capabilities, plan, approve, status, repos, repostat, last, grep, cat, ask, urgo, whoami  
+- ping, capabilities, plan, approve, status, repos, repostat, last, grep, cat, chat, agentic, whoami  
 
-(Usage hints: status \<job_id\>, repostat \<repo\>, last \<repo\>, grep \<repo\> \<query\> [path], cat \<repo\> \<path\> [start] [end], ask \<prompt\>, urgo \<prompt\>; ask/urgo support vllm: / jetson: prefix for caps routing.)
+(Usage hints: status \<job_id\>, repostat \<repo\>, last \<repo\>, grep \<repo\> \<query\> [path], cat \<repo\> \<path\> [start] [end], chat \<message\>, agentic \<request\>; natural language routing supports "preferred vllm" / "preferred jetson" hints.)
 
 ### Allowed tools for LLM tool calling (tool_registry)
 

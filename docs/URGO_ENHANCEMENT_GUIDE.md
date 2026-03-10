@@ -387,7 +387,7 @@ LLM_ALLOWED_TOOLS=repo_list,repo_status,repo_grep,repo_readfile,browser_navigate
 
 | Command | Description |
 |---------|-------------|
-| `chat <message>` | Conversational mode with memory awareness |
+| Natural language | Conversational mode with memory awareness - just type normally |
 | `persona <name>` | Switch personality |
 | `memory` | Show memory statistics |
 | `memory clear` | Clear conversation memory |

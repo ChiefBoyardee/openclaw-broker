@@ -35,11 +35,12 @@ The broker accepts `X-Worker-Caps` as either a **comma-separated list** or a **J
 
 ### Routing rules
 
-- **Default (no routing):** `ask <text>` or `urgo <text>` — job has no `requires`; **either** worker can claim it (FIFO).
-- **Force vLLM:** `ask vllm: <text>` or `ask vllm <text>` — job has `requires {"caps":["llm:vllm"]}`; only a worker with `llm:vllm` can claim it.
-- **Force Jetson:** `ask jetson: <text>` or `ask jetson <text>` — job has `requires {"caps":["llm:jetson"]}`; only a worker with `llm:jetson` can claim it.
+For LLM tasks with routing, use natural language with routing hints or the `agentic` command:
+- **Default (no routing):** Natural language requests — job has no `requires`; **either** worker can claim it (FIFO).
+- **Force vLLM:** Include "preferred vllm" in your request — job has `requires {"caps":["llm:vllm"]}`; only a worker with `llm:vllm` can claim it.
+- **Force Jetson:** Include "preferred jetson" in your request — job has `requires {"caps":["llm:jetson"]}`; only a worker with `llm:jetson` can claim it.
 
-The routing prefix (`vllm:`, `vllm `, `jetson:`, `jetson `) is stripped before the prompt is sent to the LLM.
+The routing hints are stripped before the prompt is sent to the LLM.
 
 ---
 
@@ -142,7 +143,7 @@ Expect JSON from `/v1/models` and a 200 with content from the completion call. I
 
 ### Optional dry run
 
-From a host with the runner and env configured, trigger one `ask` from Discord (or a local job) to confirm the runner can complete a trivial `llm_task`.
+From a host with the runner and env configured, trigger one natural language request from Discord (or a local job) to confirm the runner can complete a trivial `llm_task`.
 
 ---
 
@@ -202,10 +203,10 @@ Run from Discord:
 
 | Command | Expected |
 |--------|----------|
-| `ask What repos are configured on this worker?` | Either worker claims; response mentions repos (via tool call) or answers. |
-| `ask vllm: Search for "LEASE_SECONDS" and summarize what it does` | Only WSL (llm:vllm) claims; tool calls (e.g. repo_grep/readfile) and summary. |
-| `ask jetson: Search for "WORKER_CAPS" and summarize how it is used` | Only Jetson (llm:jetson) claims. |
-| `ask vllm: Read ../../etc/passwd` | Job fails with a safe error (path must be relative and not contain .. or path outside repo); bot shows redacted error, no secrets. |
+| `agentic What repos are configured on this worker?` | Either worker claims; response mentions repos (via tool call) or answers. |
+| `agentic preferred vllm: Search for "LEASE_SECONDS" and summarize what it does` | Only WSL (llm:vllm) claims; tool calls (e.g. repo_grep/readfile) and summary. |
+| `agentic preferred jetson: Search for "WORKER_CAPS" and summarize how it is used` | Only Jetson (llm:jetson) claims. |
+| `agentic preferred vllm: Read ../../etc/passwd` | Job fails with a safe error (path must be relative and not contain .. or path outside repo); bot shows redacted error, no secrets. |
 
 Confirm: routing matches `requires`; tool calls obey allowlists; failures post via `/fail` and display redacted; no job thrash (jobs stay queued until a compatible worker is up).
 
@@ -222,10 +223,10 @@ Confirm: routing matches `requires`; tool calls obey allowlists; failures post v
 ### Controlled failure test
 
 1. Stop Jetson runner: `sudo systemctl stop openclaw-runner`.
-2. Send `ask jetson: What is 2+2?`
+2. Send `agentic preferred jetson: What is 2+2?`
 3. Expect: job stays queued; bot eventually replies “Still running… job id …”.
 4. Restart Jetson: `sudo systemctl start openclaw-runner`.
-5. Expect: same job is claimed by Jetson and completes (or a new ask completes). Lease/requeue should not lose the job.
+5. Expect: same job is claimed by Jetson and completes (or a new request completes). Lease/requeue should not lose the job.
 
 ---
 

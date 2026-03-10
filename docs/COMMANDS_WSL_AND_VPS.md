@@ -1,7 +1,7 @@
 # Alternate Runbook: WSL (Broker + LLM + Runner) and VPS (Discord Bot)
 
 Use this only when you intentionally want **WSL** to run the broker, LLM, and runner, while the **VPS** runs only the Discord bot.  
-Goal: Discord bot on latest version, LLM running so you can chat with the bot (e.g. `ask …`).
+Goal: Discord bot on latest version, LLM running so you can chat with the bot using natural language.
 
 For the recommended beginner topology (`VPS = broker + bot`, `WSL = runner`), use [docs/INSTALLATION_GUIDE.md](INSTALLATION_GUIDE.md) instead.
 
@@ -199,7 +199,7 @@ DM the bot:
 - `whoami` — instance and broker URL
 - `ping hello` — should get `pong: hello`
 - `capabilities` — should show the WSL runner (and its caps, e.g. `llm:llamacpp`)
-- `ask Hello, say hi in one word.` — should go to WSL LLM and reply
+- `Hello, say hi in one word.` — should go to WSL LLM and reply (natural language)
 
 ---
 
@@ -250,4 +250,4 @@ Replace `mybot` with your instance name. Repeat for each instance.
 
 **Tokens:** Generate once on WSL (A.2). Use **BOT_TOKEN** and **BROKER_URL** (WSL broker URL) on the VPS in `onboard_bot.sh`. Use **WORKER_TOKEN** in WSL runner env and keep it secret.
 
-**Chat with bot:** After broker, runner, and LLM are up on WSL and the bot is up on VPS, use Discord `ask …` (or `ask llamacpp: …` if you have multiple workers and that’s the worker ID).
+**Chat with bot:** After broker, runner, and LLM are up on WSL and the bot is up on VPS, use Discord natural language (or add routing hints like "preferred llamacpp" if you have multiple workers).

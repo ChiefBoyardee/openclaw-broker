@@ -217,7 +217,7 @@ When a BOT_ONLY tool is called in the runner, it returns a placeholder and creat
 The system maintains full backward compatibility:
 
 - Existing `llm_task` jobs work unchanged
-- All existing commands (`ask`, `chat`, `repos`, etc.) continue to work
+- All existing commands (`agentic`, `repos`, etc.) continue to work
 - Features are enabled by default but can be disabled:
   - Set `LLM_MODE=simple` to disable runner streaming
   - Set `AGENTIC_MODE=false` to disable bot agentic mode

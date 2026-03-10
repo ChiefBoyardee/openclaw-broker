@@ -29,7 +29,7 @@ OpenClaw has three main pieces:
 |-------|---------------|
 | **Broker** | A job queue server. The bot creates jobs; runners claim and complete them. |
 | **Runner** | A worker that executes jobs (ping, file search, LLM tasks). Can run on your laptop (WSL), Jetson, or another machine. |
-| **Discord Bot** | Lets you send commands via Discord DMs (e.g. `ping hello`, `ask What's 2+2?`) and receive results. |
+| **Discord Bot** | Lets you send commands via Discord DMs (e.g. `ping hello`, natural language chat) and receive results. |
 
 **Flow:** You DM the bot → Bot creates a job on the broker → Runner picks up the job → Runner posts the result → Bot replies to you.
 
@@ -411,9 +411,9 @@ RUNNER_REPO_ALLOWLIST=/etc/openclaw/repos.json
 
 Paths in the allowlist are relative to `RUNNER_REPOS_BASE` or absolute (must stay under base). See [docs/RUNNER_REPO_CONFIG.md](RUNNER_REPO_CONFIG.md).
 
-### LLM tasks (ask, urgo)
+### LLM Configuration
 
-For `ask` and `urgo`, the runner needs an OpenAI-compatible LLM endpoint:
+For agentic mode and conversational features, the runner needs an OpenAI-compatible LLM endpoint:
 
 1. Set in runner env:
 
@@ -432,7 +432,7 @@ LLM_MAX_TOKENS=4096
 curl -s http://127.0.0.1:8000/v1/models | head
 ```
 
-See [docs/MULTI_WORKER_LLM_SMOKE.md](MULTI_WORKER_LLM_SMOKE.md) for multi-worker caps and routing (e.g. `ask vllm: ...` vs `ask jetson: ...`).
+See [docs/MULTI_WORKER_LLM_SMOKE.md](MULTI_WORKER_LLM_SMOKE.md) for multi-worker caps and routing.
 
 ---
 
@@ -565,7 +565,7 @@ curl -s http://YOUR_BROKER_URL/health
 # DM the bot: whoami
 # DM the bot: ping hello
 # DM the bot: capabilities
-# DM the bot: ask Hello
+# DM the bot: chat Hello
 
 # Smoke test (local)
 python scripts/smoke.py
