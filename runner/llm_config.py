@@ -29,6 +29,17 @@ def get_llm_config() -> dict:
             "repo_readfile",
             "plan_echo",
             "approve_echo",
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_click",
+            "browser_type",
+            "browser_search",
+            "browser_extract_article",
+            "browser_close",
+            "self_memory_add_fact",
+            "self_memory_add_reflection",
+            "discord_send_message",
+            "discord_reply",
         }
     return {
         "provider": provider,

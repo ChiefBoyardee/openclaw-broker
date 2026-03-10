@@ -23,6 +23,8 @@ from discord_bot.streaming_client import (
     get_streaming_client,
 )
 
+from discord_bot.self_memory import get_self_memory
+
 logger = logging.getLogger(__name__)
 
 
@@ -347,8 +349,8 @@ class AgenticSession:
         if self._on_tool_call:
             await self._on_tool_call(tool_name, tool_args)
 
-        # Execute Discord-native tools
-        if tool_name.startswith("discord_"):
+        # Execute Discord-native and Self-Memory tools
+        if tool_name.startswith(("discord_", "self_memory_")):
             await self._execute_discord_tool(tool_name, tool_args, chunk)
 
     async def _execute_discord_tool(
@@ -399,8 +401,40 @@ class AgenticSession:
             await self.message.channel.send(embed=embed)
             return json.dumps({"sent": True, "type": "embed"})
 
+        elif tool_name == "self_memory_add_fact":
+            content = tool_args.get("content", "")
+            if not content:
+                return json.dumps({"error": "content required"})
+            category = tool_args.get("category", "other")
+            
+            memory = get_self_memory()
+            fact_id = memory.add_learned_fact(
+                content=content,
+                source_type="conversation",
+                source_ref=self.context.conversation_id,
+                category=category,
+                confidence=0.8
+            )
+            return json.dumps({"added": True, "fact_id": fact_id, "content": content})
+
+        elif tool_name == "self_memory_add_reflection":
+            content = tool_args.get("content", "")
+            if not content:
+                return json.dumps({"error": "content required"})
+            importance = float(tool_args.get("importance", 1.0))
+            
+            memory = get_self_memory()
+            reflection_id = memory.add_reflection(
+                trigger="conversation",
+                content=content,
+                importance=importance,
+                category="realization",
+                conversation_id=self.context.conversation_id
+            )
+            return json.dumps({"added": True, "reflection_id": reflection_id})
+
         else:
-            return json.dumps({"error": f"Unknown Discord tool: {tool_name}"})
+            return json.dumps({"error": f"Unknown Discord/Bot tool: {tool_name}"})
 
     async def _handle_tool_result(self, chunk: JobChunk) -> None:
         """Handle a tool result chunk."""

@@ -419,12 +419,12 @@ def run_llm_tool_loop_streaming(
     max_tool_arg_bytes = config.get("max_tool_arg_bytes") or 4096
     consecutive_refusals = 0
 
-    # ── URL pre-fetch shortcircuit ──
+    # ── URL pre-fetch enrichment ──
     # If the user message contains URLs, fetch content before calling the LLM.
-    # This bypasses the tool loop entirely, avoiding fragile tool_calls parsing.
+    # We enrich the prompt but CONTINUE to the tool loop so the LLM can still use tools (e.g. self-memory, website tools).
     enriched_prompt = _prefetch_urls(prompt, runner_bridge)
     if enriched_prompt:
-        logger.info("URL pre-fetch: bypassing tool loop, making single LLM call with page content")
+        logger.info("URL pre-fetch: enriched prompt, continuing to tool loop")
         # Replace the user message with the enriched version
         for i in range(len(messages) - 1, -1, -1):
             if messages[i].get("role") == "user":
@@ -433,26 +433,8 @@ def run_llm_tool_loop_streaming(
 
         if stream_client:
             stream_client.post_heartbeat()
-
-        response = chat_with_tools(
-            messages,
-            [],  # No tools — force plain text response
-            base_url=config.get("base_url", ""),
-            api_key=config.get("api_key", ""),
-            model=config.get("model", ""),
-            temperature=config.get("temperature", 0.2),
-            max_tokens=config.get("max_tokens", 4096),
-        )
-        final_text = _strip_think_blocks(response.get("content") or "(no response)")
-        if stream_client:
-            stream_client.post_final(final_text)
-        return {
-            "final": final_text,
-            "tool_calls": [{"name": "url_prefetch", "args": {"urls": _URL_RE.findall(prompt)[:2]}, "status": "ok"}],
-            "model": model_used,
-            "worker_id": worker_id,
-            "safety": safety,
-        }
+            # Post a small intermediate status so user knows we pre-fetched
+            # stream_client.post_message("I've pre-fetched those URLs for you. Analyzing...", "info")
 
     while step < max_steps:
         step += 1
