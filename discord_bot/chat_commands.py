@@ -494,33 +494,41 @@ class ChatManager:
                           session: ChatSession, message_obj) -> str:
         """
         Send conversation to LLM via broker using the bot's job system.
-        
+
         This creates an llm_task job that the runner processes with full context.
         """
         import json
         import requests
         import time
-        
+
         # Get broker config from environment or bot instance
         broker_url = getattr(self.bot, 'broker_url', self.broker_url)
         bot_token = getattr(self.bot, 'bot_token', self.bot_token)
-        
+
         # Create payload with conversation context
         current_prompt = messages[-1]["content"] if messages else ""
         context_messages = messages[:-1] if len(messages) > 1 else []
-        
+
+        # Debug: Log what we're sending
+        system_msgs = [m for m in context_messages if m.get("role") == "system"]
+        if system_msgs:
+            first_system = system_msgs[0].get("content", "")[:100]
+            logger.info(f"Sending to LLM with persona {session.persona_key}, system prompt starts: {first_system}...")
+        else:
+            logger.warning(f"No system message in conversation! Persona: {session.persona_key}")
+
         # Build the payload for llm_task
         payload_obj = {
             "prompt": current_prompt,
             "conversation_history": [
-                {"role": m["role"], "content": m["content"]} 
+                {"role": m["role"], "content": m["content"]}
                 for m in context_messages
             ],
             "persona": session.persona_key,
             "temperature": voice_settings.get("temperature", 0.7),
             "max_tokens": voice_settings.get("max_tokens", 2000),
         }
-        
+
         payload_json = json.dumps(payload_obj)
         
         # Call broker directly
