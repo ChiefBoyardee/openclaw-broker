@@ -520,9 +520,16 @@ def add_job_chunk(job_id: str, body: ChunkCreate):
             "SELECT status FROM jobs WHERE id = ?",
             (job_id,),
         ).fetchone()
-
-    if not row:
-        raise HTTPException(404, "job not found")
+        
+        # Debug: log what we found
+        if not row:
+            # Check if job exists at all (including done/failed)
+            all_jobs = conn.execute(
+                "SELECT id, status FROM jobs WHERE id LIKE ?",
+                (job_id[:8] + "%",),
+            ).fetchall()
+            logger.warning(f"Chunk post for job {job_id}: not found. Similar jobs: {[dict(r) for r in all_jobs]}")
+            raise HTTPException(404, "job not found")
 
     if row["status"] not in ("running", "queued"):
         # Still allow chunks for done/failed jobs briefly (final messages)
