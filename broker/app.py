@@ -514,22 +514,29 @@ def add_job_chunk(job_id: str, body: ChunkCreate):
     if not ENABLE_STREAMING or not stream_manager:
         raise HTTPException(503, "streaming not enabled")
 
-    # Verify job exists and is running
-    with db_conn() as conn:
-        row = conn.execute(
-            "SELECT status FROM jobs WHERE id = ?",
-            (job_id,),
-        ).fetchone()
-        
-        # Debug: log what we found
-        if not row:
-            # Check if job exists at all (including done/failed)
+    # Verify job exists and is running (with retry for WAL mode visibility)
+    row = None
+    for attempt in range(3):  # Try 3 times with small delays
+        with db_conn() as conn:
+            row = conn.execute(
+                "SELECT status FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+        if row:
+            break
+        if attempt < 2:  # Don't sleep on last attempt
+            time.sleep(0.05 * (attempt + 1))  # 50ms, then 100ms
+
+    # Debug: log what we found
+    if not row:
+        # Check if job exists at all (including done/failed)
+        with db_conn() as conn:
             all_jobs = conn.execute(
                 "SELECT id, status FROM jobs WHERE id LIKE ?",
                 (job_id[:8] + "%",),
             ).fetchall()
-            logger.warning(f"Chunk post for job {job_id}: not found. Similar jobs: {[dict(r) for r in all_jobs]}")
-            raise HTTPException(404, "job not found")
+        logger.warning(f"Chunk post for job {job_id}: not found after 3 attempts. Similar jobs: {[dict(r) for r in all_jobs]}")
+        raise HTTPException(404, "job not found")
 
     if row["status"] not in ("running", "queued"):
         # Still allow chunks for done/failed jobs briefly (final messages)
