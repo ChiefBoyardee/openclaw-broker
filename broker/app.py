@@ -428,6 +428,11 @@ def next_job(
         # Re-fetch to get standardized shape (row may have old columns only before migration)
         row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         conn.execute("COMMIT")
+        
+        # Force WAL checkpoint to ensure job is visible to other connections
+        # This is critical for streaming mode where runner immediately posts chunks
+        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        
         _audit("job_claimed", job_id=job_id, worker_id=worker_id)
         return {"job": row_to_job_dict(row)}
 
