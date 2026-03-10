@@ -220,7 +220,27 @@ class ConversationMemory:
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_conv_meta_user ON conversation_metadata(created_by_user_id, last_activity)")
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_participants_user ON conversation_participants(user_id, is_active)")
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_active_conv_user ON user_active_conversations(user_id)")
-        
+
+        # Tool execution results table (for conversation context)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS tool_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                tool_name TEXT NOT NULL,
+                tool_input TEXT,  -- JSON of input parameters
+                tool_result TEXT,  -- JSON of result data
+                summary TEXT,  -- Human-readable summary for LLM context
+                timestamp REAL NOT NULL,
+                referenced_in INTEGER,  -- Message ID where this result was first shared
+                access_count INTEGER DEFAULT 0,
+                FOREIGN KEY (conversation_id) REFERENCES conversation_metadata(conversation_id) ON DELETE CASCADE
+            )
+        """)
+
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_tool_results_conv ON tool_results(conversation_id, timestamp)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_tool_results_user ON tool_results(user_id, timestamp)")
+
         self.db.commit()
         logger.info(f"Initialized conversation memory database: {self.db_path}")
     
@@ -639,13 +659,14 @@ class ConversationMemory:
             'recent_messages': [],
             'similar_messages': [],
             'user_knowledge': [],
+            'tool_results': [],
             'summary': None,
             'estimated_tokens': 0
         }
-        
+
         used_tokens = 0
         token_budget = max_tokens
-        
+
         # 1. Get summary if available
         summary = self.db.execute("""
             SELECT summary_text FROM conversation_summaries
@@ -653,34 +674,46 @@ class ConversationMemory:
             ORDER BY created_at DESC
             LIMIT 1
         """, (conversation_id,)).fetchone()
-        
+
         if summary:
             summary_tokens = len(summary['summary_text'].split())
             if used_tokens + summary_tokens < token_budget * 0.3:
                 context['summary'] = summary['summary_text']
                 used_tokens += summary_tokens
-        
+
         # 2. Get user knowledge
         knowledge = self.get_user_knowledge(user_id, limit=5)
         knowledge_text = ""
         for fact in knowledge:
             knowledge_text += f"- {fact.fact_type}: {fact.content}\n"
-        
+
         knowledge_tokens = len(knowledge_text.split())
         if used_tokens + knowledge_tokens < token_budget * 0.2:
             context['user_knowledge'] = knowledge
             used_tokens += knowledge_tokens
-        
-        # 3. Get recent messages
-        recent = self.get_recent_messages(conversation_id, 
+
+        # 3. Get recent tool results (for follow-up queries)
+        tool_results = self.get_recent_tool_results(conversation_id, limit=3)
+        if tool_results:
+            tool_context_text = "Recent tool results:\n"
+            for tr in tool_results:
+                tool_context_text += f"- {tr['tool_name']}: {tr['summary'][:100]}...\n"
+            tool_tokens = len(tool_context_text.split())
+            if used_tokens + tool_tokens < token_budget * 0.15:
+                context['tool_results'] = tool_results
+                used_tokens += tool_tokens
+                logger.info(f"Added {len(tool_results)} recent tool results to context")
+
+        # 4. Get recent messages
+        recent = self.get_recent_messages(conversation_id,
                                           limit=self.config['max_recent_messages'])
         for msg in recent:
             msg_tokens = len(msg.content.split())
-            if used_tokens + msg_tokens < token_budget * 0.5:
+            if used_tokens + msg_tokens < token_budget * 0.4:
                 context['recent_messages'].append(msg)
                 used_tokens += msg_tokens
-        
-        # 4. Get semantically similar messages
+
+        # 5. Get semantically similar messages
         if query:
             similar = self.search_similar_messages(conversation_id, query)
             for msg, score in similar[:3]:  # Top 3
@@ -688,10 +721,10 @@ class ConversationMemory:
                 if used_tokens + msg_tokens < token_budget:
                     context['similar_messages'].append((msg, score))
                     used_tokens += msg_tokens
-        
+
         context['estimated_tokens'] = used_tokens
 
-        logger.debug(f"Built context for conv {conversation_id[:20]}...: "
+        logger.debug(f"Built context for conv {conversation_id[:20]}...:"
                     f"{len(context['recent_messages'])} recent msgs, "
                     f"{len(context['user_knowledge'])} facts, "
                     f"summary={'yes' if context['summary'] else 'no'}, "
@@ -1174,7 +1207,91 @@ class ConversationMemory:
             WHERE conversation_id = ?
         """, (conversation_id, conversation_id))
         self.db.commit()
-    
+
+    def store_tool_result(self, conversation_id: str, user_id: str,
+                          tool_name: str, tool_input: Dict,
+                          tool_result: Dict, summary: str,
+                          referenced_in: int = None) -> int:
+        """
+        Store a tool execution result for conversation context.
+
+        Args:
+            conversation_id: The conversation ID
+            user_id: User ID who triggered the tool
+            tool_name: Name of the tool/command executed
+            tool_input: Input parameters (dict, will be JSON serialized)
+            tool_result: Raw result data (dict, will be JSON serialized)
+            summary: Human-readable summary for LLM context
+            referenced_in: Message ID where this result was first shared
+
+        Returns:
+            The ID of the stored tool result
+        """
+        cursor = self.db.execute("""
+            INSERT INTO tool_results
+            (conversation_id, user_id, tool_name, tool_input, tool_result, summary, timestamp, referenced_in)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            conversation_id, user_id, tool_name,
+            json.dumps(tool_input) if tool_input else None,
+            json.dumps(tool_result) if tool_result else None,
+            summary,
+            time.time(),
+            referenced_in
+        ))
+        self.db.commit()
+
+        logger.info(f"Stored tool result for {tool_name} in conversation {conversation_id[:20]}...")
+        return cursor.lastrowid
+
+    def get_recent_tool_results(self, conversation_id: str, limit: int = 5) -> List[Dict]:
+        """
+        Get recent tool execution results for a conversation.
+
+        Args:
+            conversation_id: The conversation ID
+            limit: Maximum number of results to return
+
+        Returns:
+            List of tool result dicts with keys: id, tool_name, tool_input,
+            tool_result, summary, timestamp, access_count
+        """
+        cursor = self.db.execute("""
+            SELECT id, tool_name, tool_input, tool_result, summary, timestamp, access_count
+            FROM tool_results
+            WHERE conversation_id = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        """, (conversation_id, limit))
+
+        results = []
+        result_ids = []
+
+        for row in cursor.fetchall():
+            results.append({
+                'id': row['id'],
+                'tool_name': row['tool_name'],
+                'tool_input': json.loads(row['tool_input']) if row['tool_input'] else {},
+                'tool_result': json.loads(row['tool_result']) if row['tool_result'] else {},
+                'summary': row['summary'],
+                'timestamp': row['timestamp'],
+                'access_count': row['access_count']
+            })
+            result_ids.append(row['id'])
+
+        # Update access count
+        if result_ids:
+            placeholders = ','.join('?' * len(result_ids))
+            self.db.execute(f"""
+                UPDATE tool_results
+                SET access_count = access_count + 1
+                WHERE id IN ({placeholders})
+            """, result_ids)
+            self.db.commit()
+
+        logger.debug(f"Retrieved {len(results)} recent tool results for conversation {conversation_id[:20]}...")
+        return list(reversed(results))  # Return in chronological order
+
     def get_stats(self) -> Dict[str, Any]:
         """Get memory statistics."""
         stats = {}

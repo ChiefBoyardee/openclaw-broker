@@ -517,17 +517,21 @@ class ChatManager:
     
     async def handle_chat_message(self, message_content: str, user_id: str,
                                   channel_id: str, username: str,
-                                  reply_func) -> str:
+                                  reply_func,
+                                  intent_result=None,
+                                  enable_tools: bool = False) -> str:
         """
         Handle a chat message and generate response.
-        
+
         Args:
             message_content: The message text
             user_id: Discord user ID
             channel_id: Discord channel ID
             username: User's display name
             reply_func: Async function to send reply
-        
+            intent_result: Optional IntentResult from natural language router
+            enable_tools: Whether to enable tool usage for this message
+
         Returns:
             Response text
         """
@@ -571,18 +575,48 @@ class ChatManager:
         
         # Add user knowledge if available
         if context['user_knowledge']:
-            knowledge_text = "User information:\n"
+            knowledge_lines = ["\n=== STORED USER KNOWLEDGE ==="]
+            knowledge_lines.append("The following facts about this user were learned from previous conversations.")
+            knowledge_lines.append("USE these facts naturally when answering questions about the user:")
+            knowledge_lines.append("")
+
             for fact in context['user_knowledge']:
-                knowledge_text += f"- {fact.fact_type}: {fact.content}\n"
-            system_prompt += f"\n\n{knowledge_text}"
+                # Format fact more explicitly based on content structure
+                content = fact.content.strip()
+                fact_type = fact.fact_type.lower()
+
+                # If content already contains descriptive text like "Favorite color: orange",
+                # format it to be more natural and actionable
+                if ':' in content:
+                    # Content is like "Favorite color: orange" - make it clearer
+                    knowledge_lines.append(f"  • {content}")
+                else:
+                    # Content is plain - prepend the fact type
+                    knowledge_lines.append(f"  • {fact_type}: {content}")
+
+            knowledge_lines.append("")
+            knowledge_lines.append("When asked about any of these topics, reference these facts confidently.")
+
+            knowledge_text = "\n".join(knowledge_lines)
+            system_prompt += knowledge_text
             logger.info(f"Added {len(context['user_knowledge'])} facts to system prompt for user {user_id[:8]}...")
             for fact in context['user_knowledge'][:3]:
                 logger.debug(f"  Knowledge: {fact.fact_type} = {fact.content[:50]}...")
         else:
             logger.debug(f"No user knowledge found for user {user_id[:8]}...")
 
+        # Add tool awareness if enabled via intent detection
+        if enable_tools and intent_result:
+            tool_descriptions = self._get_tool_descriptions_for_intent(intent_result.intent)
+            if tool_descriptions:
+                system_prompt += f"\n\n=== AVAILABLE TOOLS ===\n"
+                system_prompt += f"You have access to these tools for this request:\n{tool_descriptions}\n"
+                system_prompt += f"\nWhen the user's request requires information or actions beyond your knowledge, "
+                system_prompt += f"use the appropriate tool. The tool results will be provided to help you respond."
+                logger.info(f"Enabled tools for intent '{intent_result.intent}': {intent_result.suggested_tools}")
+
         messages.append({"role": "system", "content": system_prompt})
-        
+
         # Add conversation summary if available
         if context['summary']:
             messages.append({
@@ -1105,6 +1139,47 @@ class ChatManager:
         if expired:
             logger.info(f"Cleaned up {len(expired)} expired sessions")
 
+    def _get_tool_descriptions_for_intent(self, intent: str) -> str:
+        """
+        Get human-readable tool descriptions for a given intent.
+
+        Args:
+            intent: The detected intent category
+
+        Returns:
+            String describing available tools for this intent
+        """
+        tool_descriptions = {
+            "repo_explore": """- repo_list: List all available repositories
+- repo_status: Get repository git status (branch, uncommitted changes)
+- repo_last_commit: Show the most recent commit information""",
+
+            "repo_search": """- repo_grep: Search for text patterns across all files in a repository
+  Parameters: repo (required), query (required), path (optional)
+  Example: repo="openclaw-broker", query="authentication", path="src/"""",
+
+            "file_read": """- repo_readfile: Read the content of a specific file
+  Parameters: repo (required), path (required), start/end line numbers (optional)
+  Example: repo="openclaw-broker", path="main.py", start=1, end=50""",
+
+            "github_ops": """- github_list_repos: List user's GitHub repositories
+- github_list_issues: List issues in a GitHub repository
+- github_create_issue: Create a new issue in a GitHub repository
+  Parameters: repo (required), title (required), body (optional)""",
+
+            "web_research": """- browser_navigate: Visit a specific URL
+- browser_search: Search the web using a search engine
+- browser_extract_article: Extract article content from a webpage
+- browser_snapshot: Get the current page content and structure""",
+
+            "website_manage": """- website_get_stats: Get website statistics
+- website_create_post: Create a blog post
+- website_sync_from_memory: Sync website content from memory
+- nginx_get_status: Check nginx status""",
+        }
+
+        return tool_descriptions.get(intent, "")
+
 
 # Global chat manager instance
 _chat_manager_instance = None
@@ -1123,33 +1198,42 @@ def get_chat_manager(bot, broker_url: str, bot_token: str) -> ChatManager:
 
 # Command handlers for bot.py integration
 
-async def handle_chat_command(bot, message, args: str):
+async def handle_chat_command(bot, message, args: str, intent_result=None, enable_tools: bool = False):
     """
     Handle 'chat' command - conversational mode with memory.
-    
+
     Usage: chat <message>
+
+    Args:
+        bot: The bot instance
+        message: The Discord message
+        args: The message content/text
+        intent_result: Optional IntentResult from natural language routing
+        enable_tools: Whether to enable tool descriptions in system prompt
     """
     if not args:
         return "Start a conversation with me! Usage: `chat <your message>`"
-    
+
     # Get broker URL and token from bot
     broker_url = getattr(bot, 'broker_url', os.environ.get("BROKER_URL", "http://127.0.0.1:8000"))
     bot_token = getattr(bot, 'bot_token', os.environ.get("BOT_TOKEN", ""))
-    
+
     # Get chat manager
     manager = get_chat_manager(bot, broker_url, bot_token)
-    
+
     async def reply_func(text):
         await message.channel.send(text)
-    
+
     response = await manager.handle_chat_message(
         message_content=args,
         user_id=str(message.author.id),
         channel_id=str(message.channel.id),
         username=message.author.display_name,
-        reply_func=reply_func
+        reply_func=reply_func,
+        intent_result=intent_result,
+        enable_tools=enable_tools
     )
-    
+
     return response
 
 

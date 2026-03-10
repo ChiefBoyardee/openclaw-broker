@@ -37,9 +37,13 @@ try:
     from .memory import get_memory
     from .self_memory import get_self_memory
     from .personality import get_personality_engine
+    from .natural_language_router import detect_intent, IntentResult
     HAS_CONVERSATION_FEATURES = True
-except ImportError:
+    HAS_NL_ROUTER = True
+except ImportError as e:
     HAS_CONVERSATION_FEATURES = False
+    HAS_NL_ROUTER = False
+    logger.warning(f"Conversation features not available: {e}")
 
 # --- Config from env ---
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN", "")
@@ -573,45 +577,75 @@ async def on_message(message: discord.Message):
         if not payload:
             await message.reply("Usage: `ask <prompt>` or `urgo <prompt>`")
             return
+
         prompt_text = payload.strip()
-        # Forced routing: vllm: / vllm / jetson: / jetson (strip prefix so LLM does not see it)
-        prompt_for_llm = prompt_text
+
+        # Check for forced routing (vllm/jetson)
         requires = None
         pl = prompt_text.lower()
+
         if pl.startswith("vllm:") or pl.startswith("vllm ") or " preferred vllm" in pl:
+            # Strip prefix for vllm routing
             if pl.startswith("vllm:"):
-                prompt_for_llm = prompt_text[5:].lstrip()
+                prompt_text = prompt_text[5:].lstrip()
             elif pl.startswith("vllm "):
-                prompt_for_llm = prompt_text[5:].lstrip()
+                prompt_text = prompt_text[5:].lstrip()
             else:
-                prompt_for_llm = _strip_phrase_any_case(prompt_text, " preferred vllm")
-            if not prompt_for_llm.strip():
-                await message.reply("Please provide a prompt (e.g. `ask vllm: your question here`).")
-                return
-            payload_obj = {"prompt": prompt_for_llm, "preferred": "llm:vllm"}
+                prompt_text = _strip_phrase_any_case(prompt_text, " preferred vllm")
             requires = '{"caps":["llm:vllm"]}'
+
         elif pl.startswith("jetson:") or pl.startswith("jetson ") or " preferred jetson" in pl:
+            # Strip prefix for jetson routing
             if pl.startswith("jetson:"):
-                prompt_for_llm = prompt_text[7:].lstrip()
+                prompt_text = prompt_text[7:].lstrip()
             elif pl.startswith("jetson "):
-                prompt_for_llm = prompt_text[7:].lstrip()
+                prompt_text = prompt_text[7:].lstrip()
             else:
-                prompt_for_llm = _strip_phrase_any_case(prompt_text, " preferred jetson")
-            if not prompt_for_llm.strip():
-                await message.reply("Please provide a prompt (e.g. `ask jetson: your question here`).")
-                return
-            payload_obj = {"prompt": prompt_for_llm, "preferred": "llm:jetson"}
+                prompt_text = _strip_phrase_any_case(prompt_text, " preferred jetson")
             requires = '{"caps":["llm:jetson"]}'
+
+        if not prompt_text:
+            await message.reply("Please provide a prompt after the routing prefix.")
+            return
+
+        # Route through conversational handler with context support
+        if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
+            try:
+                # Detect intent for tool awareness
+                intent_result = None
+                if HAS_NL_ROUTER:
+                    intent_result = detect_intent(prompt_text)
+                    logger.info(f"Ask/Urgo intent detected: {intent_result.intent} "
+                               f"for user {message.author.id}")
+
+                async with message.channel.typing():
+                    response = await handle_chat_command(
+                        bot_instance(), message, prompt_text,
+                        intent_result=intent_result,
+                        enable_tools=True if intent_result and intent_result.confidence > 0.5 else False
+                    )
+                await reply_in_chunks(message, response)
+            except Exception as e:
+                logger.exception(f"Error in conversational ask/urgo: {e}")
+                # Fall back to traditional job-based approach on error
+                await _run_job_and_reply(
+                    message,
+                    "llm_task",
+                    json.dumps({"prompt": prompt_text}),
+                    reply_prefix="LLM job: ",
+                    parse_json=True,
+                    requires=requires,
+                )
         else:
-            payload_obj = {"prompt": prompt_for_llm}
-        await _run_job_and_reply(
-            message,
-            "llm_task",
-            json.dumps(payload_obj),
-            reply_prefix="LLM job: ",
-            parse_json=True,
-            requires=requires,
-        )
+            # Fallback to traditional job-based approach if conversation features disabled
+            await _run_job_and_reply(
+                message,
+                "llm_task",
+                json.dumps({"prompt": prompt_text}),
+                reply_prefix="LLM job: ",
+                parse_json=True,
+                requires=requires,
+            )
         return
 
     if cmd == "whoami":
@@ -745,6 +779,15 @@ async def on_message(message: discord.Message):
         if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
             help_lines.extend([
                 "",
+                "**Natural Language - Just Talk to Me!**",
+                "I understand natural language. Try these:",
+                "• \"Show me my repos\" - List repositories",
+                "• \"Find auth code in openclaw\" - Search code",
+                "• \"Read the main.py file\" - View files",
+                "• \"Remember I like pizza\" - Store facts",
+                "• \"Search the web for Python tips\" - Web research",
+                "• \"List my GitHub issues\" - GitHub operations",
+                "",
                 "**Conversation Commands:**",
                 "`persona [name]` - Switch personality",
                 "`memory [status/clear/on/off]` - Memory management",
@@ -752,7 +795,7 @@ async def on_message(message: discord.Message):
                 "`history [n]` - Show conversation history",
                 "`conversations [new/switch/rename/archive/resume]` - Manage conversations",
                 "",
-                "*(You don't need to use a command to talk to me—just say anything!)*",
+                "*(You don't need to use a command—just say what you want!)*",
             ])
 
         help_lines.extend([
@@ -765,8 +808,92 @@ async def on_message(message: discord.Message):
         await message.reply("\n".join(help_lines))
         return
 
-    # Fallback: treat unrecognized text as a natural conversational message
-    if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
+    # Unified Natural Language Handler
+    # Routes all non-command messages through intent detection and appropriate handlers
+    if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED and HAS_NL_ROUTER:
+        try:
+            # Detect intent from natural language
+            intent_result = detect_intent(text)
+            logger.info(f"Natural language intent detected: {intent_result.intent} "
+                       f"(confidence: {intent_result.confidence:.2f}) for user {message.author.id}")
+            
+            # Route based on detected intent
+            if intent_result.intent == "casual_chat" or intent_result.confidence < 0.4:
+                # Low confidence or casual chat - use standard conversational handler
+                async with message.channel.typing():
+                    response = await handle_chat_command(
+                        bot_instance(), message, text,
+                        intent_result=intent_result  # Pass intent for context
+                    )
+                await reply_in_chunks(message, response)
+                
+            elif intent_result.intent == "memory_ops":
+                # Memory management commands
+                await _handle_natural_memory_command(message, intent_result, text)
+                
+            elif intent_result.intent == "conversations_manage":
+                # Conversation management
+                await _handle_natural_conversations_command(message, intent_result, text)
+                
+            elif intent_result.intent == "persona_switch":
+                # Persona switching
+                await _handle_natural_persona_command(message, intent_result, text)
+                
+            elif intent_result.intent in ("repo_explore", "repo_search", "file_read"):
+                # Repository operations with tool awareness
+                async with message.channel.typing():
+                    response = await handle_chat_command(
+                        bot_instance(), message, text,
+                        intent_result=intent_result,
+                        enable_tools=True
+                    )
+                await reply_in_chunks(message, response)
+                
+            elif intent_result.intent == "github_ops":
+                # GitHub operations
+                await _handle_natural_github_command(message, intent_result, text)
+                
+            elif intent_result.intent == "web_research":
+                # Web research with browser tools
+                async with message.channel.typing():
+                    response = await handle_chat_command(
+                        bot_instance(), message, text,
+                        intent_result=intent_result,
+                        enable_tools=True
+                    )
+                await reply_in_chunks(message, response)
+                
+            elif intent_result.intent == "website_manage":
+                # Website management
+                await _handle_natural_website_command(message, intent_result, text)
+                
+            elif intent_result.intent == "system_status":
+                # System/capabilities queries
+                await _handle_natural_system_command(message, intent_result, text)
+                
+            else:
+                # Unknown intent - fall back to chat
+                async with message.channel.typing():
+                    response = await handle_chat_command(
+                        bot_instance(), message, text,
+                        intent_result=intent_result
+                    )
+                await reply_in_chunks(message, response)
+                
+        except Exception as e:
+            logger.exception(f"Error in natural language handler: {e}")
+            # Fall back to simple chat on error
+            try:
+                async with message.channel.typing():
+                    response = await handle_chat_command(bot_instance(), message, text)
+                await reply_in_chunks(message, response)
+            except Exception as chat_error:
+                logger.exception(f"Fallback chat also failed: {chat_error}")
+                await message.reply("I'm having trouble understanding right now...")
+        return
+    
+    elif HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
+        # Fallback if NL router not available - use standard chat
         try:
             async with message.channel.typing():
                 response = await handle_chat_command(bot_instance(), message, text)
@@ -778,6 +905,251 @@ async def on_message(message: discord.Message):
 
     # If memory is off and no known command matched
     await message.reply(f"Unknown command: `{cmd}`. Type `help` for a list of commands.")
+
+
+# Natural Language Command Handlers
+# These functions handle specific intents detected from natural language
+
+async def _handle_natural_memory_command(message: discord.Message, intent_result, text: str):
+    """Handle memory-related natural language commands."""
+    entities = intent_result.entities
+    
+    # Determine subcommand based on message content
+    text_lower = text.lower()
+    
+    if "remember" in text_lower and entities.get("fact_content"):
+        # Handle remember command
+        response = await handle_remember_command(
+            bot_instance(), message, entities["fact_content"]
+        )
+        await message.reply(response)
+        
+    elif "forget" in text_lower:
+        # Handle forget command - extract what to forget
+        # Use the entity or try to parse from message
+        forget_what = entities.get("fact_content", "")
+        if not forget_what:
+            # Try to extract after "forget"
+            match = re.search(r"forget\s+(?:that\s+)?(.+)", text_lower)
+            if match:
+                forget_what = match.group(1).strip()
+        
+        if forget_what:
+            from .chat_commands import handle_forget_command
+            response = await handle_forget_command(bot_instance(), message, forget_what)
+            await message.reply(response)
+        else:
+            await message.reply("What would you like me to forget? Please specify.")
+            
+    elif "show" in text_lower or "what do you know" in text_lower or "memories" in text_lower:
+        # Show memory status
+        response = await handle_memory_command(
+            bot_instance(), message, "status"
+        )
+        await message.reply(response)
+        
+    elif "clear" in text_lower:
+        # Clear memory
+        response = await handle_memory_command(
+            bot_instance(), message, "clear"
+        )
+        await message.reply(response)
+        
+    else:
+        # Default to showing memory status
+        response = await handle_memory_command(
+            bot_instance(), message, "status"
+        )
+        await message.reply(response)
+
+
+async def _handle_natural_conversations_command(message: discord.Message, intent_result, text: str):
+    """Handle conversation management natural language commands."""
+    entities = intent_result.entities
+    text_lower = text.lower()
+    
+    if "new" in text_lower or "start" in text_lower:
+        # Create new conversation
+        response = await handle_conversations_command(
+            bot_instance(), message, "new", ""
+        )
+        await message.reply(response)
+        
+    elif "switch" in text_lower and entities.get("conversation_id_or_name"):
+        # Switch to specific conversation
+        response = await handle_conversations_command(
+            bot_instance(), message, "switch", entities["conversation_id_or_name"]
+        )
+        await message.reply(response)
+        
+    elif "resume" in text_lower or "last" in text_lower:
+        # Resume last conversation
+        response = await handle_conversations_command(
+            bot_instance(), message, "resume", ""
+        )
+        await message.reply(response)
+        
+    elif "rename" in text_lower and entities.get("conversation_id_or_name"):
+        # Rename conversation
+        response = await handle_conversations_command(
+            bot_instance(), message, "rename", entities["conversation_id_or_name"]
+        )
+        await message.reply(response)
+        
+    else:
+        # Default to listing conversations
+        response = await handle_conversations_command(
+            bot_instance(), message, "list", ""
+        )
+        await message.reply(response)
+
+
+async def _handle_natural_persona_command(message: discord.Message, intent_result, text: str):
+    """Handle persona switching natural language commands."""
+    entities = intent_result.entities
+    
+    if entities.get("persona_name"):
+        persona = entities["persona_name"]
+        response = await handle_persona_command(
+            bot_instance(), message, persona
+        )
+        await message.reply(response)
+    else:
+        # List available personas
+        response = await handle_persona_command(
+            bot_instance(), message, None
+        )
+        await message.reply(response)
+
+
+async def _handle_natural_github_command(message: discord.Message, intent_result, text: str):
+    """Handle GitHub-related natural language commands."""
+    text_lower = text.lower()
+    
+    # For now, respond with helpful info about GitHub commands
+    # In the future, this could route to actual GitHub tool handlers
+    if "create" in text_lower and "issue" in text_lower:
+        await message.reply(
+            "I'll help you create a GitHub issue! However, I need a few details:\n"
+            "- Which repository?\n"
+            "- What's the issue title?\n"
+            "- Description of the issue?\n\n"
+            "Or you can use: `ask Create an issue in repo 'name' titled 'title'`"
+        )
+    elif "list" in text_lower and "repos" in text_lower:
+        await message.reply(
+            "I can list your GitHub repositories! Let me fetch that information for you..."
+        )
+        # Route through chat with tools enabled
+        response = await handle_chat_command(
+            bot_instance(), message, text,
+            intent_result=intent_result,
+            enable_tools=True
+        )
+        await reply_in_chunks(message, response)
+    else:
+        await message.reply(
+            "I can help with GitHub operations! I can:\n"
+            "- List your repositories\n"
+            "- Show your issues\n"
+            "- Create new issues\n\n"
+            "What would you like to do?"
+        )
+
+
+async def _handle_natural_website_command(message: discord.Message, intent_result, text: str):
+    """Handle website management natural language commands."""
+    text_lower = text.lower()
+    
+    if "create" in text_lower and "post" in text_lower:
+        await message.reply(
+            "I'll help you create a blog post! Please provide:\n"
+            "1. Title in quotes\n"
+            "2. Content in quotes\n"
+            "3. Optional category\n\n"
+            "Example: `!website_post \"My Title\" \"Content here...\" philosophy`"
+        )
+    elif "status" in text_lower or "stats" in text_lower:
+        response = await handle_website_command(
+            bot_instance(), message, "status"
+        )
+        await message.reply(response)
+    elif "regenerate" in text_lower or "rebuild" in text_lower or "refresh" in text_lower:
+        response = await handle_website_command(
+            bot_instance(), message, "regenerate"
+        )
+        await message.reply(response)
+    elif "update" in text_lower or "manage" in text_lower:
+        await message.reply(
+            "I can help you manage your website! Available commands:\n"
+            "`!website status` - Show website stats\n"
+            "`!website regenerate` - Full regeneration\n"
+            "`!website sync` - Sync from memory\n"
+            "`!website_post \"Title\" \"Content\"` - Create blog post"
+        )
+    else:
+        response = await handle_website_command(
+            bot_instance(), message, ""
+        )
+        await message.reply(response)
+
+
+async def _handle_natural_system_command(message: discord.Message, intent_result, text: str):
+    """Handle system status and capabilities natural language commands."""
+    text_lower = text.lower()
+    
+    if "what can you do" in text_lower or "capabilities" in text_lower or "help" in text_lower:
+        # Show extended help with natural language examples
+        await _show_extended_help(message)
+    elif "ping" in text_lower or "status" in text_lower:
+        await _run_job_and_reply(message, "ping", "")
+    else:
+        # Show capabilities info
+        await _show_extended_help(message)
+
+
+async def _show_extended_help(message: discord.Message):
+    """Show help with natural language examples."""
+    help_text = """I can help you with many things! Here's what I can do:
+
+**Conversational:**
+- Just chat with me naturally - I remember our conversations!
+- Ask me anything - I'll do my best to help
+
+**Repository Operations:**
+- "Show me my repos" - List your repositories
+- "Search for authentication in the discord_bot folder" - Search code
+- "Read the main.py file from openclaw-broker" - View files
+- "What repos do I have?" - Repository list
+
+**GitHub:**
+- "List my GitHub repos" - Show repositories
+- "Create an issue for the memory bug" - Issue management
+
+**Web Research:**
+- "Search the web for Python best practices" - Web search
+- "Look up information about machine learning" - Research
+
+**Website Management:**
+- "Update my website" - Website commands
+- "Show website status" - Check status
+- "Create a blog post" - Content creation
+
+**Memory:**
+- "Remember that my favorite color is blue" - Store facts
+- "What do you know about me?" - Recall memories
+- "Forget that I like pizza" - Remove memories
+
+**Conversations:**
+- "Show my conversations" - List saved chats
+- "Start a new conversation" - Create new chat
+- "Switch to conversation 2" - Change active chat
+
+I also respond to all the traditional commands like `ping`, `repos`, `grep`, `cat`, etc.
+
+What would you like to do?"""
+    
+    await message.reply(help_text)
 
 
 # Global bot instance reference for chat commands
