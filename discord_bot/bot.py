@@ -5,6 +5,7 @@ Commands: ping, capabilities, plan, approve, status, repos, repostat, last, grep
 Guardrails: cooldown, max concurrent.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -877,10 +878,13 @@ async def on_message(message: discord.Message):
             elif intent_result.intent in ("repo_explore", "repo_search", "file_read"):
                 # Repository operations with tool awareness
                 # Use agentic mode if auto-trigger is enabled and confidence is high
-                if HAS_AGENTIC_MODE and AGENTIC_MODE and AGENTIC_AUTO_TRIGGER and intent_result.confidence > 0.7:
+                logger.info(f"Repo intent detected: {intent_result.intent}. AGENTIC_MODE={AGENTIC_MODE}, "
+                           f"AUTO_TRIGGER={AGENTIC_AUTO_TRIGGER}, confidence={intent_result.confidence:.2f}")
+                if HAS_AGENTIC_MODE and AGENTIC_MODE and AGENTIC_AUTO_TRIGGER and intent_result.confidence > 0.6:
                     logger.info(f"Auto-triggering agentic mode for {intent_result.intent} (confidence: {intent_result.confidence:.2f})")
                     await handle_agentic_command(message, text)
                 else:
+                    logger.info(f"Using standard chat handler for {intent_result.intent}")
                     async with message.channel.typing():
                         response = await handle_chat_command(
                             bot_instance(), message, text,
@@ -896,10 +900,13 @@ async def on_message(message: discord.Message):
             elif intent_result.intent == "web_research":
                 # Web research with browser tools
                 # Use agentic mode for web research if auto-trigger is enabled
-                if HAS_AGENTIC_MODE and AGENTIC_MODE and AGENTIC_AUTO_TRIGGER and intent_result.confidence > 0.6:
+                logger.info(f"Web research intent detected. AGENTIC_MODE={AGENTIC_MODE}, AUTO_TRIGGER={AGENTIC_AUTO_TRIGGER}, "
+                           f"HAS_AGENTIC={HAS_AGENTIC_MODE}, confidence={intent_result.confidence:.2f}")
+                if HAS_AGENTIC_MODE and AGENTIC_MODE and AGENTIC_AUTO_TRIGGER and intent_result.confidence > 0.5:
                     logger.info(f"Auto-triggering agentic mode for web_research (confidence: {intent_result.confidence:.2f})")
                     await handle_agentic_command(message, text)
                 else:
+                    logger.info(f"Using standard chat handler for web_research (confidence: {intent_result.confidence:.2f})")
                     async with message.channel.typing():
                         response = await handle_chat_command(
                             bot_instance(), message, text,
@@ -1241,11 +1248,13 @@ async def handle_agentic_command(message: discord.Message, prompt: str):
                 logger.warning(f"Failed to get memory context: {e}")
 
         # Create session with config
+        # Use polling instead of SSE for better reliability
         config = AgenticConfig(
             max_steps=AGENTIC_DEFAULT_MAX_STEPS,
             enable_thinking_display=True,
             enable_progress_updates=True,
             max_stream_wait=AGENTIC_MAX_STREAM_WAIT,
+            use_sse=False,  # Use polling for better reliability
         )
 
         session = await manager.create_session(
@@ -1273,13 +1282,25 @@ async def handle_agentic_command(message: discord.Message, prompt: str):
         session.on_tool_call(on_tool_call)
         session.on_complete(on_complete)
 
+        # Send initial status message
+        status_msg = await message.reply("🔄 Starting agentic mode... (this may take a moment)")
+
         # Show typing indicator while processing
         async with message.channel.typing():
-            # Start the session
-            final_result = await session.start(
-                prompt=prompt,
-                conversation_history=conversation_history,
-            )
+            # Start the session with timeout
+            try:
+                final_result = await asyncio.wait_for(
+                    session.start(
+                        prompt=prompt,
+                        conversation_history=conversation_history,
+                    ),
+                    timeout=AGENTIC_MAX_STREAM_WAIT
+                )
+            except asyncio.TimeoutError:
+                logger.error(f"Agentic session timed out after {AGENTIC_MAX_STREAM_WAIT}s")
+                final_result = None
+                await status_msg.edit(content="⏱️ Agentic session timed out. The operation took too long.")
+                return
 
         if final_result:
             # Store in memory if enabled

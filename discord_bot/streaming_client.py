@@ -157,11 +157,15 @@ class BrokerStreamingClient:
             JobChunk objects as they arrive
         """
         if not self.enabled:
+            logger.warning(f"Streaming client not enabled for job {job_id}")
             return
 
         url = f"{self.broker_url}/jobs/{job_id}/chunks"
         last_id = after_id
         start_time = asyncio.get_event_loop().time()
+        chunks_received = 0
+
+        logger.info(f"Starting chunk polling for job {job_id}")
 
         while True:
             try:
@@ -178,6 +182,7 @@ class BrokerStreamingClient:
                             chunks = data.get("chunks", [])
 
                             for chunk_data in chunks:
+                                chunks_received += 1
                                 chunk = JobChunk(
                                     id=chunk_data.get("id", 0),
                                     chunk_type=chunk_data.get("chunk_type", "unknown"),
@@ -186,10 +191,15 @@ class BrokerStreamingClient:
                                     created_at=chunk_data.get("created_at"),
                                 )
                                 last_id = max(last_id, chunk.id)
+                                
+                                if chunks_received == 1:
+                                    logger.info(f"First chunk received for job {job_id}: {chunk.chunk_type}")
+                                
                                 yield chunk
 
                                 # Stop on final chunk
                                 if chunk.chunk_type == "final":
+                                    logger.info(f"Final chunk received for job {job_id}. Total chunks: {chunks_received}")
                                     return
 
                         elif response.status == 404:
