@@ -62,15 +62,15 @@ class ChatManager:
         # Initialize subsystems
         self.memory = get_memory()
         self.personality = get_personality_engine()
-        
+
         # Active sessions
         self.sessions: Dict[str, ChatSession] = {}  # conversation_id -> session
-        
+
         # Configuration
         self.session_timeout = 1800  # 30 minutes
         self.max_context_messages = 20
-        
-        logger.info("Chat manager initialized")
+
+        logger.info(f"Chat manager initialized (default persona: {self.personality.default_persona})")
     
     def _get_conversation_id(self, channel_id: str, user_id: str) -> str:
         """Generate unique conversation ID."""
@@ -98,7 +98,14 @@ class ChatManager:
         if persona_key is None:
             # Check user preferences
             settings = self.memory.get_user_settings(user_id)
-            persona_key = settings.get('preferred_persona', self.personality.default_persona)
+            preferred = settings.get('preferred_persona')
+            # If no preference set (None) or set to legacy 'default', use system default
+            if preferred is None or preferred == 'default':
+                persona_key = self.personality.default_persona
+                logger.debug(f"No user preference, using default persona: {persona_key}")
+            else:
+                persona_key = preferred
+                logger.debug(f"Using user preferred persona: {persona_key}")
         
         session = ChatSession(
             user_id=user_id,
