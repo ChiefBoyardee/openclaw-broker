@@ -1213,6 +1213,32 @@ async def handle_agentic_command(message: discord.Message, prompt: str):
 
         async def on_tool_call(tool_name: str, tool_args: dict):
             logger.info(f"Tool call: {tool_name} with args {tool_args}")
+            
+            # Handle BOT_ONLY self-memory tools
+            if tool_name == "self_memory_add_fact":
+                content = tool_args.get("content")
+                category = tool_args.get("category", "other")
+                if content:
+                    engine = get_personality_engine()
+                    engine.record_learned_fact(
+                        content=content,
+                        source_type="autonomous_reflection",
+                        category=category
+                    )
+                    logger.info(f"LLM explicitly stored self-fact: {content[:50]}...")
+
+            elif tool_name == "self_memory_add_reflection":
+                content = tool_args.get("content")
+                importance = tool_args.get("importance", 1.0)
+                if content:
+                    engine = get_personality_engine()
+                    engine.record_reflection(
+                        trigger="autonomous_reflection",
+                        content=content,
+                        importance=importance,
+                        conversation_id=conversation_id
+                    )
+                    logger.info(f"LLM recorded self-reflection: {content[:50]}...")
 
         async def on_complete(final: str):
             logger.info(f"Agentic session complete, final length: {len(final)}")

@@ -427,6 +427,14 @@ class SelfMemory:
             
             logger.info(f"New interest discovered: {topic}")
             return interest_id
+
+    def get_learned_facts(self, limit: int = 10) -> List[Dict[str, Any]]:
+        """Retrieve learned facts from the database."""
+        cursor = self.db.execute(
+            "SELECT content, source_type, confidence, category FROM learned_facts "
+            "ORDER BY confidence DESC, timestamp DESC LIMIT ?", (limit,)
+        )
+        return [dict(row) for row in cursor.fetchall()]
     
     def create_goal(self, title: str, description: str, category: str = "other",
                    priority: float = 1.0, target_date: Optional[float] = None,
@@ -709,6 +717,7 @@ class SelfMemory:
             'interests': [],
             'active_goals': [],
             'recent_reflections': [],
+            'learned_facts': [],
             'stats': {}
         }
         
@@ -731,6 +740,9 @@ class SelfMemory:
              'importance': r.importance}
             for r in self.get_recent_reflections(3)
         ]
+        
+        # Get learned facts (the core of Urgo's evolving lore)
+        context['learned_facts'] = self.get_learned_facts(10)
         
         # Get stats
         cursor = self.db.execute("SELECT COUNT(*) FROM self_reflections")

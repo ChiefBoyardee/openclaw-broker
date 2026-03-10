@@ -74,6 +74,8 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
     "discord_upload_file": ToolCategory.BOT_ONLY,
     "discord_edit_message": ToolCategory.BOT_ONLY,
     "discord_reply": ToolCategory.BOT_ONLY,
+    "self_memory_add_fact": ToolCategory.BOT_ONLY,
+    "self_memory_add_reflection": ToolCategory.BOT_ONLY,
 }
 
 
@@ -750,6 +752,36 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
         },
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "self_memory_add_fact",
+            "description": "Explicitly save a fact about yourself (Urgo) to your persistent memory. Use this for lore, origins, and personal discoveries.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "The fact to remember about yourself (e.g. 'I was created to explore code')"},
+                    "category": {"type": "string", "description": "Optional category (origins, capabilities, preferences)", "default": "other"}
+                },
+                "required": ["content"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "self_memory_add_reflection",
+            "description": "Save a personal reflection, realization, or insight about your experiences or the world.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "The reflection or insight"},
+                    "importance": {"type": "number", "description": "Importance level 0.0 to 2.0", "default": 1.0}
+                },
+                "required": ["content"]
+            }
+        }
+    }
 ]
 
 

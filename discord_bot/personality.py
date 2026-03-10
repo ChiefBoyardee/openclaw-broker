@@ -590,6 +590,12 @@ class PersonalityEngine:
                     for r in memory_ctx['recent_reflections'][:2]:
                         memory_lines.append(f"  - {r['content'][:100]}...")
                 
+                # Learned Facts (Self-KnowledgeLore)
+                if memory_ctx['learned_facts']:
+                    memory_lines.append("\nMy persistent self-knowledge & lore:")
+                    for f in memory_ctx['learned_facts'][:10]:
+                        memory_lines.append(f"  • {f['content']}")
+                
                 # Guidance on using memory - more specific and actionable
                 memory_lines.append("\n=== MEMORY USAGE GUIDANCE ===")
                 memory_lines.append("When sharing about yourself: Express enthusiasm! 'Oh, you love red? How bold and wonderful!'")
