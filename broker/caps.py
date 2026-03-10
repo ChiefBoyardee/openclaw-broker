@@ -55,6 +55,7 @@ ALLOWED_COMMANDS = frozenset({
     "repo_grep",
     "repo_readfile",
     "llm_task",
+    "llm_agentic",  # Streaming agentic mode with bidirectional tools
     "embed",  # Remote embedding for Discord Bot memory offload
     # Browser tools
     "browser_navigate",

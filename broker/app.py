@@ -406,28 +406,50 @@ def next_job(
     lease_until = now + LEASE_SECONDS
     worker_id = (x_worker_id or "").strip() or None
     worker_caps = parse_worker_caps(x_worker_caps)
+
     with db_conn() as conn:
         conn.execute("BEGIN IMMEDIATE")
         # 1) Requeue stale running jobs; clear worker_id
-        conn.execute(
+        stale_reclaimed = conn.execute(
             """UPDATE jobs
                SET status='queued', started_at=NULL, lease_until=NULL,
                    finished_at=NULL, result=NULL, error=NULL, worker_id=NULL
                WHERE status='running' AND lease_until IS NOT NULL AND lease_until < ?""",
             (now,),
-        )
+        ).rowcount
+
         # 2) Select oldest queued jobs and pick first that matches worker caps
         rows = conn.execute(
-            "SELECT id, requires FROM jobs WHERE status='queued' ORDER BY created_at ASC LIMIT 50"
+            "SELECT id, requires, command FROM jobs WHERE status='queued' ORDER BY created_at ASC LIMIT 50"
         ).fetchall()
+
+        # Diagnostic logging
+        total_queued = len(rows)
+        caps_str = ",".join(sorted(worker_caps)) if worker_caps else "(none)"
+
         job_id = None
+        skipped_reasons = []
         for row in rows:
             if job_matches_worker(row["requires"], worker_caps):
                 job_id = row["id"]
                 break
+            else:
+                # Log why job was skipped
+                req_caps = job_required_caps(row["requires"])
+                if req_caps:
+                    skipped_reasons.append(f"{row['id'][:8]}... (requires: {req_caps}, has: {worker_caps})")
+
         if not job_id:
             conn.execute("COMMIT")
+            if total_queued > 0:
+                # Jobs exist but none match - this is important diagnostic info
+                logger.info(f"Worker {worker_id} polled: {total_queued} queued job(s), 0 matched caps. "
+                           f"Worker caps: [{caps_str}]. Skipped {len(skipped_reasons)} job(s) due to capability mismatch")
+                if skipped_reasons[:3]:  # Log first 3 for debugging
+                    for reason in skipped_reasons[:3]:
+                        logger.debug(f"  Skipped: {reason}")
             return {"job": None}
+
         # 3) Claim: set running, started_at, lease_until, worker_id; clear result/error/finished_at
         cur = conn.execute(
             """UPDATE jobs
@@ -438,6 +460,7 @@ def next_job(
         )
         if cur.rowcount != 1:
             conn.execute("COMMIT")
+            logger.warning(f"Worker {worker_id} failed to claim job {job_id[:8]}... - race condition (job no longer queued)")
             return {"job": None}
 
         # Re-fetch to get standardized shape (row may have old columns only before migration)
@@ -445,14 +468,16 @@ def next_job(
         conn.execute("COMMIT")
 
     # Force WAL checkpoint in a fresh connection to ensure job is visible
-    # This is critical for streaming mode where runner immediately posts chunks
-    # We do this outside the main transaction to ensure full visibility
     try:
         with db_conn() as checkpoint_conn:
             checkpoint_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     except Exception as e:
         logger.warning(f"WAL checkpoint failed (non-fatal): {e}")
 
+    # Success logging with diagnostics
+    job_command = row["command"] if row else "unknown"
+    logger.info(f"Worker {worker_id} claimed job {job_id[:8]}... (command: {job_command}). "
+               f"Queued before claim: {total_queued}. Stale jobs requeued: {stale_reclaimed}")
     _audit("job_claimed", job_id=job_id, worker_id=worker_id)
     return {"job": row_to_job_dict(row)}
 

@@ -339,13 +339,29 @@ def main():
     if caps_list:
         headers["X-Worker-Caps"] = json.dumps(caps_list)
     logger.info(f"started; broker={BROKER_URL} worker_id={WORKER_ID} poll_interval={POLL_INTERVAL_SEC}s caps={caps_list}")
+
+    # Polling diagnostics - track polls and log periodically to show we're alive
+    poll_count = 0
+    last_status_log = time.time()
+    empty_polls_since_log = 0
+    STATUS_LOG_INTERVAL = 60  # Log status every 60 seconds
+
     while True:
         try:
+            poll_count += 1
             r = requests.get(f"{BROKER_URL}/jobs/next", headers=headers, timeout=30)
             r.raise_for_status()
             data = r.json()
             job = data.get("job")
             if not job:
+                empty_polls_since_log += 1
+                # Periodic logging to show runner is alive and polling
+                now = time.time()
+                if now - last_status_log >= STATUS_LOG_INTERVAL:
+                    logger.info(f"Runner alive: {poll_count} polls, {empty_polls_since_log} empty since last log. "
+                               f"Waiting for jobs... (caps: {caps_list})")
+                    last_status_log = now
+                    empty_polls_since_log = 0
                 time.sleep(POLL_INTERVAL_SEC)
                 continue
             job_id = job["id"]

@@ -217,10 +217,23 @@ class BrokerStreamingClient:
                                 await asyncio.sleep(delay)
                                 continue  # Try again immediately
                             else:
-                                # After 5 attempts, just log at debug level and continue normal polling
-                                # The runner may be busy with previous LLM work - keep waiting
-                                logger.debug(f"Job {job_id} not visible yet, continuing to poll...")
-                                # Fall through to normal sleep at end of loop
+                                # After 5 attempts, query the actual job status to diagnose the issue
+                                job_info = await self._get_job_status(job_id)
+                                if job_info:
+                                    status = job_info.get("status", "unknown")
+                                    worker = job_info.get("worker_id", "none")
+                                    command = job_info.get("command", "unknown")
+                                    if status == "queued":
+                                        logger.warning(f"Job {job_id} exists but is still 'queued' (not claimed). "
+                                                      f"Worker: {worker}, Command: {command}. "
+                                                      f"Runner may not be polling or capability mismatch.")
+                                    elif status == "running":
+                                        logger.warning(f"Job {job_id} is 'running' but chunks endpoint 404. "
+                                                      f"Worker: {worker}. Possible streaming not enabled on broker.")
+                                    else:
+                                        logger.debug(f"Job {job_id} status: {status}, continuing to poll...")
+                                else:
+                                    logger.debug(f"Job {job_id} not visible in jobs table yet, continuing to poll...")
 
                 # Check timeout
                 elapsed = asyncio.get_event_loop().time() - start_time
@@ -261,6 +274,26 @@ class BrokerStreamingClient:
             logger.warning(f"Error checking job status: {e}")
 
         return False
+
+    async def _get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
+        """Get full job status information for diagnostics.
+
+        Returns:
+            Job data dict if found, None if job doesn't exist or error.
+        """
+        url = f"{self.broker_url}/jobs/{job_id}"
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=self._headers()) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    elif response.status == 404:
+                        return None
+        except Exception as e:
+            logger.debug(f"Error fetching job status: {e}")
+
+        return None
 
     async def get_pending_tool_calls(
         self,

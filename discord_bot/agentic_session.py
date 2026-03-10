@@ -182,13 +182,61 @@ class AgenticSession:
                 ) as response:
                     if response.status == 200:
                         data = await response.json()
-                        return data.get("id")
+                        job_id = data.get("id")
+                        logger.info(f"Job created successfully: {job_id}")
+                        return job_id
+                    elif response.status == 400:
+                        text = await response.text()
+                        logger.error(f"Job creation failed (400 - invalid request): {text[:500]}")
+                        await self._send_message(f"I can't process that request. Error: {text[:200]}")
+                    elif response.status == 401:
+                        logger.error("Job creation failed (401 - authentication error). Check BOT_TOKEN.")
+                        await self._send_message("I'm having trouble authenticating with the broker. Please check my configuration.")
+                    elif response.status == 429:
+                        logger.error("Job creation failed (429 - rate limit).")
+                        await self._send_message("I'm a bit overloaded right now. Please try again in a moment.")
                     else:
-                        logger.error(f"Failed to create job: {response.status}")
+                        logger.error(f"Failed to create job: HTTP {response.status}")
                         text = await response.text()
                         logger.error(f"Response: {text[:500]}")
+                        await self._send_message(f"I encountered an error (HTTP {response.status}) when trying to process your request.")
+        except aiohttp.ClientError as e:
+            logger.exception(f"Network error creating job - cannot connect to broker at {broker_url}: {e}")
+            await self._send_message("I can't reach the job broker right now. The runner may be offline.")
         except Exception as e:
-            logger.exception(f"Error creating job: {e}")
+            logger.exception(f"Unexpected error creating job: {e}")
+            await self._send_message("An unexpected error occurred while processing your request.")
+
+        return None
+
+    async def _check_job_status(self) -> Optional[str]:
+        """Check the current status of the job from the broker.
+
+        Returns:
+            Job status string (queued, running, done, failed) or None if not found/error.
+        """
+        import os
+        import aiohttp
+
+        broker_url = os.environ.get("BROKER_URL", "http://127.0.0.1:8000").rstrip("/")
+        bot_token = os.environ.get("BOT_TOKEN", "")
+
+        if not self.job_id:
+            return None
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{broker_url}/jobs/{self.job_id}",
+                    headers={"X-Bot-Token": bot_token},
+                ) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        return data.get("status")
+                    elif response.status == 404:
+                        return None
+        except Exception as e:
+            logger.debug(f"Error checking job status: {e}")
 
         return None
 
@@ -199,10 +247,24 @@ class AgenticSession:
 
         try:
             # Initial delay to allow runner to claim the job before we start polling
-            # Runner polls every 10s, so we need to wait at least 10-12s for it to claim
-            initial_delay = 12.0  # 12 second delay for runner to claim and start processing
+            # Runner polls every 10s (default), but may have longer intervals or network delays
+            # We wait 15s to account for: poll_interval (10s) + network latency + processing time
+            import os
+            initial_delay = float(os.environ.get("AGENTIC_INITIAL_WAIT_SEC", "15.0"))
             logger.info(f"Waiting {initial_delay}s for runner to claim job {self.job_id} before polling...")
             await asyncio.sleep(initial_delay)
+
+            # Verify job was claimed - check if it's still "queued"
+            job_status = await self._check_job_status()
+            if job_status == "queued":
+                logger.warning(f"Job {self.job_id} is still 'queued' after {initial_delay}s wait. "
+                              f"Runner may not be polling or there's a capability mismatch.")
+            elif job_status == "running":
+                logger.info(f"Job {self.job_id} is 'running' - runner claimed it successfully")
+            elif job_status in ("done", "failed"):
+                logger.info(f"Job {self.job_id} is already '{job_status}' - runner may have finished quickly")
+            elif job_status is None:
+                logger.error(f"Job {self.job_id} not found after wait - may have been deleted or never created")
 
             if self.config.use_sse:
                 # Use SSE streaming
