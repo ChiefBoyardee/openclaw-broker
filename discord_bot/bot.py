@@ -752,11 +752,19 @@ def _init_conversation_features():
     """Initialize memory and personality systems if enabled."""
     if not HAS_CONVERSATION_FEATURES or not MEMORY_ENABLED:
         return
-    
+
     try:
+        # Ensure HuggingFace cache goes to a writable location.
+        # Systemd services with ProtectSystem=strict only allow writes to
+        # ReadWritePaths — the default ~/.cache may be on a read-only mount.
+        if "HF_HOME" not in os.environ:
+            hf_cache = os.path.join(os.getcwd(), ".cache", "huggingface")
+            os.makedirs(hf_cache, exist_ok=True)
+            os.environ["HF_HOME"] = hf_cache
+
         # Initialize memory with embedding provider
         embedding_provider = None
-        
+
         if EMBEDDING_PROVIDER == "openai" and OPENAI_API_KEY:
             try:
                 import openai
@@ -842,7 +850,9 @@ def main():
     # Store bot instance reference
     _bot_instance = client
     
-    client.run(DISCORD_TOKEN)
+    # log_handler=None prevents discord.py from adding a second StreamHandler
+    # to the root logger (our basicConfig already configures one).
+    client.run(DISCORD_TOKEN, log_handler=None)
 
 
 if __name__ == "__main__":
