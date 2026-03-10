@@ -350,11 +350,11 @@ class RemoteEmbeddingProvider(EmbeddingProvider):
         url = f"{self.broker_url}/jobs/{job_id}"
 
         start_time = time.monotonic()
-        poll_interval = 0.5
+        poll_interval = 0.1  # Short interval to avoid blocking Discord event loop
 
         while time.monotonic() - start_time < self.timeout:
             try:
-                r = requests.get(url, headers=headers, timeout=10)
+                r = requests.get(url, headers=headers, timeout=5)  # Short timeout
                 r.raise_for_status()
                 job = r.json()
 
@@ -374,8 +374,9 @@ class RemoteEmbeddingProvider(EmbeddingProvider):
                     return None
 
                 # Job still pending/running, wait and retry
+                # Use short sleeps to avoid blocking the event loop
                 time.sleep(poll_interval)
-                poll_interval = min(poll_interval * 1.5, 2.0)  # Gentle backoff
+                poll_interval = min(poll_interval * 1.2, 0.5)  # Cap at 0.5s
 
             except Exception as e:
                 logger.warning(f"Poll error: {e}")

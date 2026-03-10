@@ -717,8 +717,20 @@ Ensure your response matches this personality. Do not drift toward generic respo
         logger.info(f"Loading custom personas from: {abs_path}")
 
         if not os.path.isfile(file_path):
-            logger.warning(f"Custom personas file not found: {abs_path}")
-            return 0
+            # Try alternate filename (with/without underscore)
+            alt_path = None
+            if "custom_personas" in file_path:
+                alt_path = file_path.replace("custom_personas", "custompersonas")
+            elif "custompersonas" in file_path:
+                alt_path = file_path.replace("custompersonas", "custom_personas")
+            
+            if alt_path and os.path.isfile(alt_path):
+                logger.info(f"Found alternate personas file: {alt_path}")
+                file_path = alt_path
+                abs_path = os.path.abspath(file_path)
+            else:
+                logger.warning(f"Custom personas file not found: {abs_path}")
+                return 0
 
         try:
             loaded = load_custom_personas_from_file(file_path)
