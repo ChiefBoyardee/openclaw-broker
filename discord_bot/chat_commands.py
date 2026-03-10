@@ -127,6 +127,115 @@ class ChatManager:
             del self.sessions[conversation_id]
             
             logger.info(f"Ended chat session: {conversation_id}")
+    
+    def _extract_obvious_facts(self, message: str) -> list:
+        """
+        Extract obvious facts from user message for immediate storage.
+        
+        Returns list of (fact_type, content) tuples.
+        This is lightweight pattern matching - not NLP, just obvious patterns.
+        """
+        import re
+        facts = []
+        message_lower = message.lower()
+        
+        # Pattern: "my favorite X is Y" / "I love X" / "I hate X"
+        fav_patterns = [
+            r"my favorite (\w+) is (.+?)(?:\.|$|!|\?)",
+            r"i love (.+?)(?:\.|$|!|\?)",
+            r"i really like (.+?)(?:\.|$|!|\?)",
+            r"i hate (.+?)(?:\.|$|!|\?)",
+            r"i dislike (.+?)(?:\.|$|!|\?)",
+        ]
+        for pattern in fav_patterns:
+            match = re.search(pattern, message_lower)
+            if match:
+                if "favorite" in pattern:
+                    fact_type = f"favorite_{match.group(1)}"
+                    content = match.group(2).strip()
+                elif "love" in pattern or "like" in pattern:
+                    fact_type = "preference"
+                    content = f"Likes: {match.group(1).strip()}"
+                else:
+                    fact_type = "preference"
+                    content = f"Dislikes: {match.group(1).strip()}"
+                facts.append((fact_type, content))
+        
+        # Pattern: "I live in X" / "I'm from X" / "I'm in X"
+        location_patterns = [
+            r"i live in (.+?)(?:\.|$|!|\?|,)",
+            r"i['']?m from (.+?)(?:\.|$|!|\?|,)",
+            r"i['']?m in (.+?) (?:now|currently)(?:\.|$|!|\?|,)",
+        ]
+        for pattern in location_patterns:
+            match = re.search(pattern, message_lower)
+            if match:
+                location = match.group(1).strip()
+                # Clean up common extra words
+                location = re.sub(r'\b(right now|currently|at the moment)\b', '', location).strip()
+                if location:
+                    facts.append(("location", location))
+                    break  # Only take first location match
+        
+        # Pattern: "My name is X" / "I'm X" / "Call me X"
+        name_patterns = [
+            r"my name is (.+?)(?:\.|$|!|\?|,)",
+            r"i['']?m (.+?) (?:and|but|\.)",
+            r"call me (.+?)(?:\.|$|!|\?|,)",
+        ]
+        for pattern in name_patterns:
+            match = re.search(pattern, message_lower)
+            if match:
+                name = match.group(1).strip()
+                # Avoid capturing obvious non-names
+                non_names = ['a ', 'an ', 'the ', 'here', 'there', 'sad', 'happy', 'tired', 'busy', 'not ', 'really']
+                if not any(name.startswith(n) or name == n for n in non_names):
+                    facts.append(("name", name))
+                    break
+        
+        # Pattern: "I work as X" / "I'm a X" / "I do X for work"
+        job_patterns = [
+            r"i work as (.+?)(?:\.|$|!|\?|,)",
+            r"i['']?m a[n]? (.+?) (?:and|who|\.)",
+            r"i do (.+?) for (?:work|a living)",
+        ]
+        for pattern in job_patterns:
+            match = re.search(pattern, message_lower)
+            if match:
+                job = match.group(1).strip()
+                facts.append(("occupation", job))
+                break
+        
+        # Pattern: "I have X" / "I own X" (pets, items)
+        possession_patterns = [
+            r"i have a (.+?)(?:\.|$|!|\?|,)",
+            r"i own a (.+?)(?:\.|$|!|\?|,)",
+        ]
+        for pattern in possession_patterns:
+            match = re.search(pattern, message_lower)
+            if match:
+                item = match.group(1).strip()
+                # Only capture if it's likely interesting (has descriptor words)
+                if any(word in item for word in ['dog', 'cat', 'pet', 'car', 'bike', 'house', 'old', 'new', 'big', 'small']):
+                    facts.append(("possession", item))
+                    break
+        
+        # Pattern: "I'm X years old" / "I was born in X"
+        age_patterns = [
+            r"i['']?m (\d+) years? old",
+            r"i was born in (\d{4})",
+        ]
+        for pattern in age_patterns:
+            match = re.search(pattern, message_lower)
+            if match:
+                if "years" in pattern:
+                    facts.append(("age", f"{match.group(1)} years old"))
+                else:
+                    facts.append(("birth_year", match.group(1)))
+                break
+        
+        # Limit to first 2 facts to avoid over-extracting
+        return facts[:2]
             
     async def _process_memory_background(self, user_id: str, conversation_id: str):
         """Asynchronously process conversation history to extract, update, or remove facts using LLM."""
@@ -321,6 +430,16 @@ class ChatManager:
             message_content,
             metadata={"username": username}
         )
+        
+        # Extract and store obvious facts immediately (don't wait for background)
+        immediate_facts = self._extract_obvious_facts(message_content)
+        if immediate_facts:
+            for fact_type, content in immediate_facts:
+                try:
+                    self.memory.add_user_fact(user_id, fact_type, content, confidence=0.9)
+                    logger.info(f"Immediate memory: Stored {fact_type}='{content}' for user {user_id}")
+                except Exception as e:
+                    logger.debug(f"Failed to store immediate fact: {e}")
         
         # Get voice settings
         voice_settings = self.personality.get_voice_settings(persona, user_id)

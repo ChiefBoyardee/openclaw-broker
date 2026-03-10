@@ -31,6 +31,7 @@ try:
         handle_history_command,
     )
     from .memory import get_memory
+    from .self_memory import get_self_memory
     from .personality import get_personality_engine
     HAS_CONVERSATION_FEATURES = True
 except ImportError:
@@ -54,6 +55,7 @@ BOT_PRESENCE = os.environ.get("BOT_PRESENCE", "Listening to DMs").strip()
 # --- Conversation/Memory Feature Config ---
 MEMORY_ENABLED = os.environ.get("MEMORY_ENABLED", "true").lower() in ("true", "1", "yes")
 MEMORY_DB_PATH = os.environ.get("MEMORY_DB_PATH", "discord_bot_memory.db")
+SELF_MEMORY_DB_PATH = os.environ.get("SELF_MEMORY_DB_PATH", "urgo_self_memory.db")
 DEFAULT_PERSONA = os.environ.get("DEFAULT_PERSONA", "helpful_assistant")
 CUSTOM_PERSONAS_PATH = os.environ.get("CUSTOM_PERSONAS_PATH", "custom_personas.json")
 EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "none").lower()  # 'openai', 'local', 'none'
@@ -809,8 +811,34 @@ def _init_conversation_features():
                 logger.warning("sentence-transformers not installed, local embeddings disabled")
                 logger.warning("Install with: pip install sentence-transformers")
         
+        # Health check: Test embedding provider if configured (run in background)
+        if embedding_provider:
+            def run_health_check():
+                try:
+                    import numpy as np
+                    test_text = "Health check test embedding"
+                    test_result = embedding_provider(test_text)
+                    
+                    if test_result is not None:
+                        if isinstance(test_result, np.ndarray):
+                            dim = len(test_result)
+                        elif isinstance(test_result, list):
+                            dim = len(test_result)
+                        else:
+                            dim = "unknown"
+                        logger.info(f"Embedding health check PASSED - dimension: {dim}")
+                    else:
+                        logger.error("Embedding health check FAILED - provider returned None")
+                except Exception as e:
+                    logger.error(f"Embedding health check FAILED: {e}")
+            
+            # Run health check in background thread to not block startup
+            import threading
+            threading.Thread(target=run_health_check, daemon=True).start()
+        
         # Initialize memory and personality (used by chat_commands when handling chat)
         get_memory(MEMORY_DB_PATH, embedding_provider)
+        get_self_memory(SELF_MEMORY_DB_PATH, embedding_provider)
         engine = get_personality_engine(DEFAULT_PERSONA)
 
         # Load custom personas from user config (lives alongside bot.env, survives updates)

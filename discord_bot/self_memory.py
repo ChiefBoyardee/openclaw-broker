@@ -734,18 +734,31 @@ class SelfMemory:
         
         # Get stats
         cursor = self.db.execute("SELECT COUNT(*) FROM self_reflections")
-        context['stats']['total_reflections'] = cursor.fetchone()[0]
+        total_reflections = cursor.fetchone()[0]
+        context['stats']['total_reflections'] = total_reflections
         
         cursor = self.db.execute("SELECT COUNT(*) FROM learned_facts")
-        context['stats']['total_facts'] = cursor.fetchone()[0]
+        total_facts = cursor.fetchone()[0]
+        context['stats']['total_facts'] = total_facts
         
         cursor = self.db.execute("SELECT COUNT(*) FROM interests")
-        context['stats']['total_interests'] = cursor.fetchone()[0]
+        total_interests = cursor.fetchone()[0]
+        context['stats']['total_interests'] = total_interests
         
         cursor = self.db.execute(
             "SELECT COUNT(*) FROM goals WHERE status = 'active'"
         )
-        context['stats']['active_goals'] = cursor.fetchone()[0]
+        active_goals = cursor.fetchone()[0]
+        context['stats']['active_goals'] = active_goals
+        
+        # Generate human-friendly memory summary message
+        # Frame empty/zero stats positively, not as failures
+        if total_facts == 0 and total_interests == 0:
+            context['memory_summary_message'] = "Every conversation is a new adventure! I'm excited to discover what interests we'll explore together."
+        elif total_facts < 5:
+            context['memory_summary_message'] = f"I'm beginning to build my understanding - {total_facts} facts learned so far, with {total_interests} topics catching my interest."
+        else:
+            context['memory_summary_message'] = f"I've learned {total_facts} fascinating things across {total_interests} interests that spark my curiosity!"
         
         return context
     
