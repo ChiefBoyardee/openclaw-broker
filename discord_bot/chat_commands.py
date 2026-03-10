@@ -1156,7 +1156,7 @@ class ChatManager:
 
             "repo_search": """- repo_grep: Search for text patterns across all files in a repository
   Parameters: repo (required), query (required), path (optional)
-  Example: repo="openclaw-broker", query="authentication", path="src/"""",
+  Example: repo="openclaw-broker", query="authentication", path="src/""",
 
             "file_read": """- repo_readfile: Read the content of a specific file
   Parameters: repo (required), path (required), start/end line numbers (optional)
