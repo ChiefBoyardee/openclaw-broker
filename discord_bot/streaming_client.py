@@ -206,14 +206,18 @@ class BrokerStreamingClient:
                                     return
 
                         elif response.status == 404:
-                            # Job might not be visible yet due to WAL mode - retry a few times
-                            if not_found_attempts < 3:
+                            # Job might not be visible yet due to WAL mode - retry with exponential backoff
+                            # Increased from 3 to 5 attempts with longer delays for runner to claim job
+                            max_not_found_attempts = 5
+                            if not_found_attempts < max_not_found_attempts:
                                 not_found_attempts += 1
-                                logger.warning(f"Job {job_id} not found (attempt {not_found_attempts}/3), retrying...")
-                                await asyncio.sleep(0.1 * not_found_attempts)  # 100ms, 200ms, 300ms
-                                continue  # Try again
+                                # Exponential backoff: 200ms, 400ms, 800ms, 1600ms, 3200ms
+                                delay = 0.2 * (2 ** (not_found_attempts - 1))
+                                logger.warning(f"Job {job_id} not found (attempt {not_found_attempts}/{max_not_found_attempts}), retrying in {delay:.1f}s...")
+                                await asyncio.sleep(delay)
+                                continue  # Try again immediately
                             else:
-                                logger.error(f"Job {job_id} not found after 3 attempts")
+                                logger.error(f"Job {job_id} not found after {max_not_found_attempts} attempts - runner may not have claimed it yet")
                                 return
 
                 # Check timeout

@@ -198,6 +198,12 @@ class AgenticSession:
             return
 
         try:
+            # Initial delay to allow runner to claim the job before we start polling
+            # This prevents "Job not found" errors due to race condition with WAL mode
+            initial_delay = 1.0  # 1 second delay to let runner claim and start processing
+            logger.debug(f"Waiting {initial_delay}s before starting chunk polling for job {self.job_id}")
+            await asyncio.sleep(initial_delay)
+
             if self.config.use_sse:
                 # Use SSE streaming
                 async for chunk in self.streaming_client.stream_job(

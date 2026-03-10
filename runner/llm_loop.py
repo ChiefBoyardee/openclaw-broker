@@ -272,8 +272,14 @@ def run_llm_tool_loop_streaming(
             "safety": {"reason": "no_tools"},
         }
 
-    # Post initial thinking
+    # Verify job visibility before posting first chunks (WAL mode race condition fix)
     if stream_client:
+        import time
+        # Small delay to allow WAL commit to propagate
+        time.sleep(0.2)
+        # Verify job is visible, retry if needed
+        if not stream_client.verify_job_visible(max_retries=5, initial_delay=0.2):
+            logger.warning(f"Could not verify job visibility, attempting to post anyway...")
         stream_client.post_thinking("Analyzing the request and planning approach...", step=0)
         stream_client.post_progress(f"Starting agentic loop with {max_steps} max steps", percent=5)
 

@@ -770,16 +770,34 @@ async def on_message(message: discord.Message):
             logger.info(f"Natural language intent detected: {intent_result.intent} "
                        f"(confidence: {intent_result.confidence:.2f}) for user {message.author.id}")
             
-            # AGENTIC-FIRST ROUTING: Use agentic mode for almost everything
+            # AGENTIC-FIRST ROUTING: Agentic mode is the DEFAULT for almost everything
             # This gives the LLM full autonomy to use tools and multi-turn reasoning
-            
+
             logger.info(f"Intent detected: {intent_result.intent} (confidence: {intent_result.confidence:.2f}). "
                        f"HAS_AGENTIC={HAS_AGENTIC_MODE}, AGENTIC_MODE={AGENTIC_MODE}")
-            
-            # Only use simple chat for clear conversational intents with high confidence
-            # Everything else gets the full agentic treatment with tool autonomy
-            if intent_result.intent == "casual_chat" and intent_result.confidence > 0.7 and not _has_url(text):
-                # Clear conversational query - quick simple response (but not for URLs!)
+
+            # FORCE AGENTIC MODE for:
+            # 1. Any message containing a URL (web research, browsing, etc.)
+            # 2. Any intent that suggests tool usage (web_research, repo_search, file_read, etc.)
+            # 3. Low confidence detection (let the LLM figure it out)
+            force_agentic = False
+            agentic_reason = ""
+
+            if _has_url(text):
+                force_agentic = True
+                agentic_reason = "URL detected"
+            elif intent_result.intent in ("web_research", "repo_search", "file_read", "repo_explore", "github_ops", "website_manage"):
+                force_agentic = True
+                agentic_reason = f"tool intent: {intent_result.intent}"
+            elif intent_result.confidence < 0.5:
+                force_agentic = True
+                agentic_reason = f"low confidence ({intent_result.confidence:.2f}), letting LLM decide"
+
+            if force_agentic and HAS_AGENTIC_MODE and AGENTIC_MODE:
+                logger.info(f"AGENTIC MODE - {agentic_reason}. Giving LLM full tool autonomy.")
+                await handle_agentic_command(message, text)
+            elif intent_result.intent == "casual_chat" and intent_result.confidence > 0.7:
+                # ONLY for clear conversational queries with HIGH confidence
                 logger.info(f"Simple chat for clear casual_chat (confidence: {intent_result.confidence:.2f})")
                 async with message.channel.typing():
                     response = await handle_chat_command(
@@ -787,25 +805,24 @@ async def on_message(message: discord.Message):
                         intent_result=intent_result
                     )
                 await reply_in_chunks(message, response)
-                
+
             elif intent_result.intent == "memory_ops":
                 # Memory commands - use specialized handler for consistency
                 await _handle_natural_memory_command(message, intent_result, text)
-                
+
             elif intent_result.intent == "conversations_manage":
                 # Conversation management - specialized handler
                 await _handle_natural_conversations_command(message, intent_result, text)
-                
+
             elif intent_result.intent == "persona_switch":
                 # Persona switch - specialized handler
                 await _handle_natural_persona_command(message, intent_result, text)
-                
+
             elif HAS_AGENTIC_MODE and AGENTIC_MODE:
                 # DEFAULT: Agentic mode for everything else
-                # Web research, repo operations, GitHub, website, system, unknown - all agentic
-                logger.info(f"AGENTIC MODE for '{intent_result.intent}' - giving LLM full tool autonomy")
+                logger.info(f"AGENTIC MODE for '{intent_result.intent}' - defaulting to tool autonomy")
                 await handle_agentic_command(message, text)
-                
+
             else:
                 # Fallback if agentic not available
                 logger.warning(f"Agentic unavailable, using standard chat for '{intent_result.intent}'")

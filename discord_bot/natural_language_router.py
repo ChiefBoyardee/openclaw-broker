@@ -199,15 +199,35 @@ class NaturalLanguageRouter:
     def detect_intent(self, message: str) -> IntentResult:
         """
         Detect the intent of a natural language message.
-        
+
         Args:
             message: The user's natural language message
-            
+
         Returns:
             IntentResult with detected intent, confidence, and extracted entities
         """
+        import re
         message_lower = message.lower().strip()
-        
+
+        # FIRST: Check for URLs - if present, force web_research intent
+        # This ensures any message with a URL gets proper tool routing
+        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+        url_match = re.search(url_pattern, message)
+        if url_match:
+            url = url_match.group(0)
+            # Extract domain for potential use
+            domain_match = re.search(r'https?://([^/]+)', url)
+            domain = domain_match.group(1) if domain_match else ""
+
+            logger.info(f"URL detected in message, forcing web_research intent: {url[:50]}...")
+            return IntentResult(
+                intent="web_research",
+                confidence=0.85,
+                entities={"url": url, "domain": domain, "search_query": message},
+                suggested_tools=["browser_navigate", "browser_extract_article", "browser_search"],
+                raw_message=message
+            )
+
         # Check each intent in order of specificity
         for intent, config in self.INTENT_PATTERNS.items():
             # Try pattern matching first
@@ -216,9 +236,9 @@ class NaturalLanguageRouter:
                 if match:
                     entities = self._extract_entities(intent, match, message)
                     confidence = self._calculate_confidence(intent, message, entities, match)
-                    
+
                     logger.info(f"Detected intent '{intent}' with confidence {confidence:.2f} for message: {message[:50]}...")
-                    
+
                     return IntentResult(
                         intent=intent,
                         confidence=confidence,
@@ -226,15 +246,15 @@ class NaturalLanguageRouter:
                         suggested_tools=config["suggested_tools"],
                         raw_message=message
                     )
-            
+
             # Try keyword matching if no pattern matched
             keyword_matches = sum(1 for kw in config["keywords"] if kw in message_lower)
             if keyword_matches > 0:
                 confidence = min(0.5 + (keyword_matches * 0.1), 0.7)  # Max 0.7 for keyword-only
                 entities = self._extract_entities_from_keywords(intent, message)
-                
+
                 logger.info(f"Detected intent '{intent}' via keywords (confidence {confidence:.2f})")
-                
+
                 return IntentResult(
                     intent=intent,
                     confidence=confidence,
@@ -242,7 +262,7 @@ class NaturalLanguageRouter:
                     suggested_tools=config["suggested_tools"],
                     raw_message=message
                 )
-        
+
         # Check for casual chat patterns
         for pattern in self._compiled_casual:
             if pattern.search(message):
@@ -254,7 +274,7 @@ class NaturalLanguageRouter:
                     suggested_tools=[],
                     raw_message=message
                 )
-        
+
         # Default to casual_chat with low confidence
         logger.debug(f"No specific intent detected, defaulting to casual_chat")
         return IntentResult(

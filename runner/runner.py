@@ -876,6 +876,12 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
             )
             return json.dumps(envelope)
 
+        # Verify job visibility before posting (WAL mode race condition fix)
+        import time
+        time.sleep(0.2)  # Allow WAL commit to propagate
+        if not stream_client.verify_job_visible(max_retries=5, initial_delay=0.2):
+            logger.warning(f"Job {job_id_for_streaming} not visible after retries, attempting to post anyway...")
+
         # Post initial message (will fail silently if not enabled, but we checked above)
         stream_client.post_message("Starting agentic task...", "info")
 

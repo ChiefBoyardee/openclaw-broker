@@ -63,6 +63,58 @@ class RunnerStreamClient:
         """Return authentication headers."""
         return {"X-Worker-Token": self.worker_token}
 
+    def verify_job_visible(self, max_retries: int = 5, initial_delay: float = 0.2) -> bool:
+        """
+        Verify that the job is visible to the broker before posting chunks.
+
+        This is critical for WAL mode SQLite where job visibility may be delayed
+        after the runner claims the job.
+
+        Args:
+            max_retries: Maximum number of retry attempts
+            initial_delay: Initial delay between retries in seconds (doubles each retry)
+
+        Returns:
+            True if job is visible, False otherwise
+        """
+        if not self.enabled:
+            return False
+
+        url = f"{self.broker_url}/jobs/{self.job_id}"
+        delay = initial_delay
+
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(
+                    url,
+                    headers=self._headers(),
+                    timeout=CHUNK_POST_TIMEOUT,
+                )
+
+                if response.status_code == 200:
+                    if attempt > 0:
+                        logger.info(f"Job {self.job_id} now visible after {attempt + 1} attempts")
+                    return True
+                elif response.status_code == 404:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Job {self.job_id} not visible yet (attempt {attempt + 1}/{max_retries}), waiting {delay:.2f}s...")
+                        time.sleep(delay)
+                        delay *= 2  # Exponential backoff
+                    else:
+                        logger.error(f"Job {self.job_id} still not visible after {max_retries} attempts")
+                        return False
+                else:
+                    logger.warning(f"Unexpected status {response.status_code} checking job visibility")
+                    return False
+
+            except requests.RequestException as e:
+                logger.warning(f"Request error checking job visibility: {e}")
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+                    delay *= 2
+
+        return False
+
     def post_chunk(
         self,
         chunk_type: str,

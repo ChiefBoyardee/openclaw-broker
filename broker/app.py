@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import sqlite3
 import sys
@@ -50,6 +51,8 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from broker.caps import is_command_allowed, job_matches_worker, parse_worker_caps
+
+logger = logging.getLogger(__name__)
 from broker.streaming import (
     ChunkType,
     JobChunk,
@@ -428,13 +431,18 @@ def next_job(
         # Re-fetch to get standardized shape (row may have old columns only before migration)
         row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
         conn.execute("COMMIT")
-        
-        # Force WAL checkpoint to ensure job is visible to other connections
-        # This is critical for streaming mode where runner immediately posts chunks
-        conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        
-        _audit("job_claimed", job_id=job_id, worker_id=worker_id)
-        return {"job": row_to_job_dict(row)}
+
+    # Force WAL checkpoint in a fresh connection to ensure job is visible
+    # This is critical for streaming mode where runner immediately posts chunks
+    # We do this outside the main transaction to ensure full visibility
+    try:
+        with db_conn() as checkpoint_conn:
+            checkpoint_conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception as e:
+        logger.warning(f"WAL checkpoint failed (non-fatal): {e}")
+
+    _audit("job_claimed", job_id=job_id, worker_id=worker_id)
+    return {"job": row_to_job_dict(row)}
 
 
 @app.get("/jobs/{job_id}", dependencies=[Depends(require_bot_token)])
