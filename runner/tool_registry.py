@@ -477,6 +477,110 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
+    # Nginx Management tools
+    {
+        "type": "function",
+        "function": {
+            "name": "nginx_generate_config",
+            "description": "Generate a security-hardened nginx configuration for a domain.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Domain name (e.g., 'urgo.sgc.earth')"},
+                    "web_root": {"type": "string", "description": "Absolute path to website files (e.g., '/var/www/urgo')"},
+                    "ssl_cert": {"type": "string", "description": "Path to SSL certificate (optional)"},
+                    "ssl_key": {"type": "string", "description": "Path to SSL certificate key (optional)"},
+                    "enable_http2": {"type": "boolean", "description": "Enable HTTP/2 (requires SSL)", "default": True},
+                    "rate_limit_zone": {"type": "string", "description": "Rate limiting zone name", "default": "ai_site"},
+                    "rate_limit_rps": {"type": "integer", "description": "Requests per second limit", "default": 10},
+                    "rate_limit_burst": {"type": "integer", "description": "Burst capacity", "default": 20},
+                },
+                "required": ["domain", "web_root"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "nginx_install_config",
+            "description": "Install nginx configuration file for a domain.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Domain name"},
+                    "config_content": {"type": "string", "description": "Nginx configuration content"},
+                    "enable": {"type": "boolean", "description": "Enable the site after install", "default": True},
+                },
+                "required": ["domain", "config_content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "nginx_enable_site",
+            "description": "Enable an nginx site by creating symlink.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Domain name to enable"},
+                },
+                "required": ["domain"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "nginx_disable_site",
+            "description": "Disable an nginx site by removing symlink.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Domain name to disable"},
+                },
+                "required": ["domain"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "nginx_remove_config",
+            "description": "Remove nginx configuration for a domain.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "domain": {"type": "string", "description": "Domain name to remove"},
+                },
+                "required": ["domain"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "nginx_test_config",
+            "description": "Test nginx configuration syntax.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "nginx_reload",
+            "description": "Reload nginx configuration safely (tests first).",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "nginx_get_status",
+            "description": "Get nginx service status and site information.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
 ]
 
 
@@ -709,6 +813,49 @@ def dispatch(
         )
     if name == "website_get_stats":
         return runner_bridge.website_get_stats()
+    # Nginx Management tools
+    if name == "nginx_generate_config":
+        domain = args.get("domain", "")
+        web_root = args.get("web_root", "")
+        if not domain or not web_root:
+            raise ValueError("domain and web_root required")
+        return runner_bridge.nginx_generate_config(
+            domain,
+            web_root,
+            args.get("ssl_cert"),
+            args.get("ssl_key"),
+            args.get("enable_http2", True),
+            args.get("rate_limit_zone", "ai_site"),
+            args.get("rate_limit_rps", 10),
+            args.get("rate_limit_burst", 20),
+        )
+    if name == "nginx_install_config":
+        domain = args.get("domain", "")
+        config_content = args.get("config_content", "")
+        if not domain or not config_content:
+            raise ValueError("domain and config_content required")
+        return runner_bridge.nginx_install_config(domain, config_content, args.get("enable", True))
+    if name == "nginx_enable_site":
+        domain = args.get("domain", "")
+        if not domain:
+            raise ValueError("domain required")
+        return runner_bridge.nginx_enable_site(domain)
+    if name == "nginx_disable_site":
+        domain = args.get("domain", "")
+        if not domain:
+            raise ValueError("domain required")
+        return runner_bridge.nginx_disable_site(domain)
+    if name == "nginx_remove_config":
+        domain = args.get("domain", "")
+        if not domain:
+            raise ValueError("domain required")
+        return runner_bridge.nginx_remove_config(domain)
+    if name == "nginx_test_config":
+        return runner_bridge.nginx_test_config()
+    if name == "nginx_reload":
+        return runner_bridge.nginx_reload()
+    if name == "nginx_get_status":
+        return runner_bridge.nginx_get_status()
     raise ValueError(f"unknown tool: {name}")
 
 

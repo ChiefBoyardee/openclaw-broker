@@ -9,6 +9,10 @@
 custom_personas.json
 !custom_personas.json.example
 
+# Instance-specific website configuration (never commit — copy from custom_website_config.json.example)
+custom_website_config.json
+!custom_website_config.json.example
+
 # Python
 __pycache__/
 *.py[cod]

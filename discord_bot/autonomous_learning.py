@@ -294,6 +294,18 @@ class AutonomousLearning:
                 })
             )
         
+        # Queue website auto-update if significant new content
+        if self.should_trigger_website_update(recorded):
+            self.queue_website_update('sync', {
+                'conversation_id': conversation_id,
+                'new_interests': recorded['interests_added'],
+                'new_reflections': recorded['reflections_added'],
+                'new_facts': recorded['facts_added']
+            })
+            recorded['website_update_queued'] = True
+        else:
+            recorded['website_update_queued'] = False
+        
         return recorded
     
     def generate_research_task(self, topic: str, priority: float = 1.0,
@@ -430,6 +442,133 @@ class AutonomousLearning:
         except Exception as e:
             logger.error(f"Error checking research trigger: {e}")
             return False
+    
+    def queue_website_update(self, update_type: str, content: Optional[Dict] = None) -> Optional[LearningTask]:
+        """
+        Queue a website update task.
+        
+        Args:
+            update_type: Type of update ('sync', 'reflection', 'interest', 'goal')
+            content: Optional content dict for the update
+            
+        Returns:
+            LearningTask if queued, None otherwise
+        """
+        import uuid
+        import time
+        
+        task = LearningTask(
+            id=str(uuid.uuid4()),
+            topic=f"website_{update_type}",
+            task_type='update_website',
+            priority=1.0,
+            status='pending',
+            created_at=time.time(),
+            source_conversation=None,
+            metadata={'update_type': update_type, 'content': content}
+        )
+        
+        self.pending_tasks.append(task)
+        logger.info(f"Queued website update: {update_type}")
+        return task
+    
+    def should_trigger_website_update(self, recorded_items: Dict[str, List]) -> bool:
+        """
+        Determine if website should be auto-updated based on recorded items.
+        
+        Args:
+            recorded_items: Dict with keys like 'interests_added', 'reflections_added', etc.
+            
+        Returns:
+            True if website update should be triggered
+        """
+        # Count total new items
+        total = sum(len(v) for v in recorded_items.values())
+        
+        # Update if we have new content
+        if total >= 3:
+            return True
+        
+        # Update if we have a new reflection (important)
+        if recorded_items.get('reflections_added'):
+            return True
+        
+        # Update if we have a new interest with high engagement
+        if len(recorded_items.get('interests_added', [])) >= 1:
+            return True
+        
+        return False
+    
+    async def process_website_updates(self, recorded: Dict[str, List]) -> Dict[str, Any]:
+        """
+        Process website updates based on recorded learnings.
+        
+        Args:
+            recorded: Recorded items from conversation processing
+            
+        Returns:
+            Update results
+        """
+        results = {
+            'updated': False,
+            'pages_updated': [],
+            'errors': []
+        }
+        
+        try:
+            # Only update if we have significant new content
+            if not self.should_trigger_website_update(recorded):
+                return results
+            
+            logger.info("Auto-updating website from recorded learnings")
+            
+            # Import here to avoid circular imports
+            from runner.vps_website_tools import website_sync_from_memory
+            
+            # Sync from memory (this updates reflections, interests, goals pages)
+            sync_result = website_sync_from_memory()
+            sync_data = json.loads(sync_result)
+            
+            if sync_data.get('success'):
+                results['updated'] = True
+                results['pages_updated'] = sync_data.get('pages_created', [])
+                results['memory_counts'] = sync_data.get('memory_counts', {})
+                logger.info(f"Website auto-updated: {len(results['pages_updated'])} pages")
+            else:
+                results['errors'].append(sync_data.get('error', 'Sync failed'))
+                logger.error(f"Website auto-update failed: {sync_data.get('error')}")
+        
+        except Exception as e:
+            logger.error(f"Error in website auto-update: {e}")
+            results['errors'].append(str(e))
+        
+        return results
+    
+    def record_learning_and_update_website(self, conversation_id: str,
+                                          messages: List[Dict]) -> Dict[str, Any]:
+        """
+        Record learning from conversation and optionally update website.
+        
+        This is a convenience method that combines recording with website updates.
+        
+        Args:
+            conversation_id: Conversation ID
+            messages: List of messages
+            
+        Returns:
+            Combined results with 'recorded' and 'website_update' keys
+        """
+        # Record the learning
+        recorded = self.record_learning_from_conversation(conversation_id, messages)
+        
+        # Queue website update if significant new content
+        if self.should_trigger_website_update(recorded):
+            self.queue_website_update('sync', {'conversation_id': conversation_id})
+        
+        return {
+            'recorded': recorded,
+            'website_update_queued': self.should_trigger_website_update(recorded)
+        }
 
 
 # Global instance

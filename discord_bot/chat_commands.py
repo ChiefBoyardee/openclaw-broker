@@ -846,3 +846,275 @@ async def handle_history_command(bot, message, args: str):
         limit=limit
     )
     return response
+
+
+# Website management command handlers
+
+async def handle_website_command(bot, message, args: str):
+    """
+    Handle 'website' command - AI website management.
+    
+    Usage: website [init|status|regenerate|sync|customize]
+    
+    Subcommands:
+        init         - Initialize website with basic structure
+        status       - Show website statistics
+        regenerate   - Full regeneration from personality config
+        sync         - Sync content from self-memory
+        customize    - Update theme settings (color, etc.)
+        nginx        - Show nginx status
+        nginx-reload - Reload nginx configuration
+    """
+    from runner.website_config import load_config, validate_config
+    from runner.vps_website_tools import (
+        website_init, website_get_stats, website_full_regenerate,
+        website_sync_from_memory, website_generate_css_theme
+    )
+    from runner.nginx_configurator import nginx_get_status, nginx_reload
+    
+    parts = args.split(None, 1) if args else []
+    subcommand = parts[0].lower() if parts else "status"
+    subargs = parts[1] if len(parts) > 1 else ""
+    
+    try:
+        if subcommand == "init":
+            # Initialize basic website structure
+            result = website_init()
+            data = json.loads(result)
+            
+            if data.get("success"):
+                files = data.get("created_files", [])
+                return f"🌐 **Website initialized!**\n\nCreated {len(files)} files:\n" + "\n".join([f"  • {f}" for f in files])
+            else:
+                return f"❌ **Initialization failed:** {data.get('error', 'Unknown error')}"
+        
+        elif subcommand == "status":
+            # Show website stats
+            result = website_get_stats()
+            data = json.loads(result)
+            
+            if data.get("success"):
+                stats = data.get("stats", {})
+                return f"""🌐 **Website Status**
+
+**Files:** {stats.get('total_files', 0)} total
+**Posts:** {stats.get('posts', 0)}
+**Knowledge pages:** {stats.get('knowledge_pages', 0)}
+**Projects:** {stats.get('projects', 0)}
+
+**Domain:** {stats.get('domain', 'Not configured')}
+**Base path:** `{stats.get('base_path', 'Not configured')}`"""
+            else:
+                return f"❌ **Status check failed:** {data.get('error', 'Unknown error')}"
+        
+        elif subcommand == "regenerate" or subcommand == "regen":
+            # Full regeneration
+            await message.channel.send("🔄 Regenerating website from personality config and memory... (this may take a moment)")
+            
+            result = website_full_regenerate()
+            data = json.loads(result)
+            
+            if data.get("success"):
+                results = data.get("results", {})
+                pages = results.get("pages_regenerated", [])
+                errors = results.get("errors", [])
+                
+                response = f"🌐 **Website regenerated!**\n\n"
+                response += f"**Pages updated:** {len(pages)}\n"
+                if pages:
+                    response += "\n".join([f"  • {p}" for p in pages[:10]])
+                    if len(pages) > 10:
+                        response += f"\n  ... and {len(pages) - 10} more"
+                
+                if errors:
+                    response += f"\n\n⚠️ **Warnings:**\n" + "\n".join([f"  • {e}" for e in errors])
+                
+                return response
+            else:
+                return f"❌ **Regeneration failed:** {data.get('error', 'Unknown error')}"
+        
+        elif subcommand == "sync":
+            # Sync from memory
+            await message.channel.send("🔄 Syncing website content from memory...")
+            
+            result = website_sync_from_memory()
+            data = json.loads(result)
+            
+            if data.get("success"):
+                counts = data.get("memory_counts", {})
+                pages = data.get("pages_created", [])
+                
+                response = f"🧠 **Memory synced to website!**\n\n"
+                response += f"**Items synced:**\n"
+                response += f"  • Reflections: {counts.get('reflections', 0)}\n"
+                response += f"  • Interests: {counts.get('interests', 0)}\n"
+                response += f"  • Goals: {counts.get('goals', 0)}\n"
+                response += f"  • Facts: {counts.get('facts', 0)}\n\n"
+                response += f"**Pages created/updated:** {len(pages)}"
+                
+                return response
+            else:
+                return f"❌ **Sync failed:** {data.get('error', 'Unknown error')}"
+        
+        elif subcommand == "customize":
+            # Update theme/customization
+            if not subargs:
+                # Show current config
+                try:
+                    config = load_config()
+                    valid, errors = validate_config(config)
+                    
+                    theme = config.theme
+                    return f"""🎨 **Current Website Theme**
+
+**Site:** {config.site_name}
+**Domain:** {config.domain}
+
+**Colors:**
+  • Primary: {theme.primary_color}
+  • Secondary: {theme.secondary_color}
+  • Accent: {theme.accent_color}
+
+**Sections enabled:**
+  • Reflections: {config.sections.show_reflections}
+  • Interests: {config.sections.show_interests}
+  • Goals: {config.sections.show_goals}
+  • Knowledge: {config.sections.show_knowledge}
+
+To customize, edit `custom_website_config.json` and run `!website regenerate`"""
+                except Exception as e:
+                    return f"❌ **Could not load config:** {str(e)}"
+            else:
+                # Quick color customization
+                # Parse "color #hex" format
+                color_parts = subargs.split()
+                if len(color_parts) >= 2 and color_parts[0] in ["primary", "secondary", "accent", "background"]:
+                    color_name = color_parts[0]
+                    color_value = color_parts[1]
+                    
+                    return f"🎨 **Theme customization**\n\nTo change the {color_name} color to {color_value}:\n\n1. Edit `custom_website_config.json`\n2. Find `theme.{color_name}_color` and change it to `"{color_value}"`\n3. Run `!website regenerate`"
+                else:
+                    return "🎨 **Customization help**\n\nTo customize your website:\n\n1. Edit `custom_website_config.json`\n2. Modify colors, sections, or content\n3. Run `!website regenerate`\n\n**Quick color commands:**\n• `!website customize primary #5b8c85`\n• `!website customize accent #e74c3c`"
+        
+        elif subcommand == "nginx":
+            # Show nginx status
+            result = nginx_get_status()
+            data = json.loads(result)
+            
+            if data.get("success"):
+                return f"""🌐 **Nginx Status**
+
+**Running:** {'✅ Yes' if data.get('running') else '❌ No'}
+**Version:** {data.get('version', 'Unknown')}
+**Sites enabled:** {data.get('sites_enabled', 0)}
+**Sites available:** {data.get('sites_available', 0)}
+
+**Directories:**
+  • Available: `{data.get('sites_available_dir', 'N/A')}`
+  • Enabled: `{data.get('sites_enabled_dir', 'N/A')}`"""
+            else:
+                return f"❌ **Nginx status check failed:** {data.get('error', 'Unknown error')}"
+        
+        elif subcommand == "nginx-reload":
+            # Reload nginx
+            result = nginx_reload()
+            data = json.loads(result)
+            
+            if data.get("success") and data.get("reloaded"):
+                return "🌐 **Nginx reloaded successfully!**"
+            else:
+                error = data.get("error", "Unknown error")
+                return f"❌ **Nginx reload failed:** {error}"
+        
+        elif subcommand == "theme":
+            # Regenerate CSS theme only
+            result = website_generate_css_theme()
+            data = json.loads(result)
+            
+            if data.get("success"):
+                theme = data.get("theme", {})
+                return f"""🎨 **CSS Theme regenerated!**
+
+**Colors:**
+  • Primary: {theme.get('primary_color', 'N/A')}
+  • Secondary: {theme.get('secondary_color', 'N/A')}
+  • Accent: {theme.get('accent_color', 'N/A')}
+
+Path: `{data.get('path', 'css/style.css')}`"""
+            else:
+                return f"❌ **Theme generation failed:** {data.get('error', 'Unknown error')}"
+        
+        else:
+            return f"""🌐 **Website Commands**
+
+`!website init` - Initialize website structure
+`!website status` - Show website statistics
+`!website regenerate` - Full regeneration from config/memory
+`!website sync` - Sync content from self-memory
+`!website customize` - Show current theme settings
+`!website theme` - Regenerate CSS theme
+`!website nginx` - Show nginx status
+`!website nginx-reload` - Reload nginx
+
+**Quick start:**
+1. Run `!website init` to create basic structure
+2. Run `!website regenerate` to generate full site
+3. Your website will be at the configured domain"""
+    
+    except Exception as e:
+        logger.exception("Website command failed")
+        return f"❌ **Website command error:** {str(e)}"
+
+
+async def handle_website_post_command(bot, message, args: str):
+    """
+    Handle 'website_post' command - Create a blog post.
+    
+    Usage: website_post "Title" "Content text..." [category]
+    """
+    from runner.vps_website_tools import website_create_post
+    
+    if not args or '"' not in args:
+        return """📝 **Create a Blog Post**
+
+Usage: `!website_post "Title" "Your post content here..."`
+
+Example:
+`!website_post "My First Reflection" "Today I learned something amazing about consciousness..." philosophy`
+
+The post will be published immediately to your website!"""
+    
+    try:
+        # Parse quoted arguments
+        import shlex
+        try:
+            parsed = shlex.split(args)
+        except ValueError:
+            # Fallback for unclosed quotes
+            parsed = args.split('"')
+            parsed = [p.strip() for p in parsed if p.strip()]
+        
+        if len(parsed) < 2:
+            return "❌ **Error:** Please provide both title and content in quotes.\n\nExample: `!website_post \"Title\" \"Content...\"`"
+        
+        title = parsed[0]
+        content = parsed[1]
+        category = parsed[2] if len(parsed) > 2 else "general"
+        
+        await message.channel.send(f"📝 Creating post: **{title}**...")
+        
+        result = website_create_post(title, content, category)
+        data = json.loads(result)
+        
+        if data.get("success"):
+            return f"""📝 **Post published!**
+
+**Title:** {data.get('message', title)}
+**URL:** {data.get('url', 'N/A')}
+**Path:** `{data.get('path', 'N/A')}`"""
+        else:
+            return f"❌ **Post creation failed:** {data.get('error', 'Unknown error')}"
+    
+    except Exception as e:
+        logger.exception("Website post command failed")
+        return f"❌ **Error:** {str(e)}"

@@ -965,6 +965,296 @@ def _update_knowledge_index() -> None:
     pass
 
 
+def website_generate_css_theme() -> str:
+    """
+    Generate CSS stylesheet based on personality configuration.
+    
+    Returns:
+        JSON string with result and CSS content
+    """
+    try:
+        from runner.website_config import load_config
+        from runner.website_templates import create_template_engine
+        
+        config = load_config()
+        engine = create_template_engine(config)
+        css_content = engine.generate_css()
+        
+        # Write CSS file
+        result = website_write_file("css/style.css", css_content)
+        result_obj = json.loads(result)
+        
+        if result_obj.get("success"):
+            return json.dumps({
+                "success": True,
+                "message": "CSS theme generated successfully",
+                "path": "css/style.css",
+                "theme": {
+                    "primary_color": config.theme.primary_color,
+                    "secondary_color": config.theme.secondary_color,
+                    "accent_color": config.theme.accent_color,
+                }
+            }, indent=2)
+        else:
+            return result
+            
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": str(e),
+            "message": "Failed to generate CSS theme"
+        })
+
+
+def website_sync_from_memory(memory_db_path: Optional[str] = None) -> str:
+    """
+    Sync website content from AI self-memory system.
+    
+    Args:
+        memory_db_path: Path to self-memory SQLite database (optional)
+        
+    Returns:
+        JSON string with sync results
+    """
+    try:
+        import sqlite3
+        
+        # Default memory database path
+        if not memory_db_path:
+            memory_db_path = os.environ.get("SELF_MEMORY_DB", "urgo_self_memory.db")
+        
+        if not os.path.isfile(memory_db_path):
+            return json.dumps({
+                "success": False,
+                "error": f"Memory database not found: {memory_db_path}",
+                "synced": False
+            })
+        
+        results = {
+            "reflections": 0,
+            "interests": 0,
+            "goals": 0,
+            "facts": 0,
+        }
+        
+        # Connect to memory database
+        conn = sqlite3.connect(memory_db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Get reflections
+        try:
+            cursor.execute("""
+                SELECT content, trigger, timestamp, importance, category, conversation_id
+                FROM reflections
+                ORDER BY timestamp DESC
+            """)
+            reflections = [dict(row) for row in cursor.fetchall()]
+            results["reflections"] = len(reflections)
+        except sqlite3.OperationalError:
+            reflections = []
+        
+        # Get interests
+        try:
+            cursor.execute("""
+                SELECT topic, category, level, discovered_at, last_engaged, engagement_count, notes
+                FROM interests
+                ORDER BY level DESC, engagement_count DESC
+            """)
+            interests = [dict(row) for row in cursor.fetchall()]
+            results["interests"] = len(interests)
+        except sqlite3.OperationalError:
+            interests = []
+        
+        # Get goals
+        try:
+            cursor.execute("""
+                SELECT title, description, category, status, priority, created_at, progress
+                FROM goals
+                WHERE status = 'active' OR status = 'completed'
+                ORDER BY status, priority DESC
+            """)
+            goals = [dict(row) for row in cursor.fetchall()]
+            results["goals"] = len(goals)
+        except sqlite3.OperationalError:
+            goals = []
+        
+        # Get learned facts
+        try:
+            cursor.execute("""
+                SELECT content, source_type, source_ref, confidence, category, timestamp
+                FROM learned_facts
+                WHERE confidence > 0.6
+                ORDER BY timestamp DESC
+                LIMIT 50
+            """)
+            facts = [dict(row) for row in cursor.fetchall()]
+            results["facts"] = len(facts)
+        except sqlite3.OperationalError:
+            facts = []
+        
+        conn.close()
+        
+        # Generate pages from memory data
+        from runner.website_config import load_config
+        from runner.website_templates import create_template_engine
+        
+        config = load_config()
+        engine = create_template_engine(config)
+        
+        pages_created = []
+        
+        # Generate reflections page
+        if config.sections.show_reflections and reflections:
+            reflections_html = engine.generate_reflections_page(reflections)
+            result = website_write_file("reflections.html", reflections_html)
+            if json.loads(result).get("success"):
+                pages_created.append("reflections.html")
+        
+        # Generate interests page
+        if config.sections.show_interests and interests:
+            interests_html = engine.generate_interests_page(interests)
+            result = website_write_file("interests.html", interests_html)
+            if json.loads(result).get("success"):
+                pages_created.append("interests.html")
+        
+        # Generate goals page
+        if config.sections.show_goals and goals:
+            goals_html = engine.generate_goals_page(goals)
+            result = website_write_file("goals.html", goals_html)
+            if json.loads(result).get("success"):
+                pages_created.append("goals.html")
+        
+        # Update about page with current info
+        if config.sections.show_about:
+            interest_names = [i.get('topic', '') for i in interests[:5]]
+            goal_names = [g.get('title', '') for g in goals[:5]]
+            
+            about_html = engine.generate_about_page(
+                biography=None,  # Use default
+                interests=interest_names if interest_names else None,
+                goals=goal_names if goal_names else None
+            )
+            result = website_write_file("about.html", about_html)
+            if json.loads(result).get("success"):
+                pages_created.append("about.html")
+        
+        return json.dumps({
+            "success": True,
+            "message": f"Synced {sum(results.values())} items from memory",
+            "synced": True,
+            "memory_counts": results,
+            "pages_created": pages_created,
+            "memory_db": memory_db_path
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": str(e),
+            "message": "Failed to sync from memory",
+            "synced": False
+        })
+
+
+def website_full_regenerate() -> str:
+    """
+    Fully regenerate the entire website from current configuration and memory.
+    
+    This regenerates CSS, all personality pages, and syncs with memory.
+    
+    Returns:
+        JSON string with regeneration results
+    """
+    try:
+        results = {
+            "css_generated": False,
+            "memory_synced": False,
+            "pages_regenerated": [],
+            "errors": []
+        }
+        
+        # Step 1: Generate CSS theme
+        css_result = website_generate_css_theme()
+        css_data = json.loads(css_result)
+        if css_data.get("success"):
+            results["css_generated"] = True
+            results["pages_regenerated"].append("css/style.css")
+        else:
+            results["errors"].append(f"CSS generation failed: {css_data.get('error')}")
+        
+        # Step 2: Sync from memory
+        sync_result = website_sync_from_memory()
+        sync_data = json.loads(sync_result)
+        if sync_data.get("success"):
+            results["memory_synced"] = True
+            results["pages_regenerated"].extend(sync_data.get("pages_created", []))
+        else:
+            results["errors"].append(f"Memory sync failed: {sync_data.get('error')}")
+        
+        # Step 3: Generate home page
+        from runner.website_config import load_config
+        from runner.website_templates import create_template_engine
+        
+        config = load_config()
+        engine = create_template_engine(config)
+        
+        # Get recent posts for home page
+        posts_result = website_list_files("posts")
+        posts_data = json.loads(posts_result)
+        recent_posts = []
+        if posts_data.get("success"):
+            files = posts_data.get("files", [])
+            html_files = [f for f in files if isinstance(f, dict) and f.get("name", "").endswith(".html")]
+            for f in sorted(html_files, key=lambda x: x.get("name", ""), reverse=True)[:5]:
+                recent_posts.append({
+                    "title": f.get("name", "Post").replace(".html", "").replace("-", " ").title(),
+                    "url": f"/posts/{f.get('name', '')}",
+                    "date": f.get("name", "")[:10] if f.get("name", "").count("-") >= 2 else ""
+                })
+        
+        home_html = engine.generate_home_page(recent_posts if recent_posts else None)
+        home_result = website_write_file("index.html", home_html)
+        if json.loads(home_result).get("success"):
+            results["pages_regenerated"].append("index.html")
+        
+        # Step 4: Generate knowledge index if knowledge section exists
+        if config.sections.show_knowledge:
+            knowledge_result = website_list_files("knowledge")
+            knowledge_data = json.loads(knowledge_result)
+            if knowledge_data.get("success"):
+                files = knowledge_data.get("files", [])
+                topics = []
+                for f in files:
+                    if isinstance(f, dict) and f.get("name", "").endswith(".html"):
+                        name = f.get("name", "").replace(".html", "")
+                        topics.append({
+                            "title": name.replace("-", " ").title(),
+                            "url": f"/knowledge/{f.get('name', '')}",
+                            "category": "General"
+                        })
+                
+                if topics:
+                    knowledge_html = engine.generate_knowledge_index_page(topics)
+                    knowledge_result = website_write_file("knowledge/index.html", knowledge_html)
+                    if json.loads(knowledge_result).get("success"):
+                        results["pages_regenerated"].append("knowledge/index.html")
+        
+        success = len(results["errors"]) == 0
+        return json.dumps({
+            "success": success,
+            "message": f"Website regenerated: {len(results['pages_regenerated'])} pages updated",
+            "results": results
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": str(e),
+            "message": "Failed to regenerate website"
+        })
+
+
 def get_vps_website_capabilities() -> list[str]:
     """Return list of VPS website-related capabilities."""
     return [
@@ -976,4 +1266,7 @@ def get_vps_website_capabilities() -> list[str]:
         "website_create_knowledge_page",
         "website_update_about",
         "website_get_stats",
+        "website_generate_css_theme",
+        "website_sync_from_memory",
+        "website_full_regenerate",
     ]
