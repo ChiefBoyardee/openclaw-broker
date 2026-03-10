@@ -25,21 +25,35 @@ logger = logging.getLogger(__name__)
 
 def format_thinking_as_spoilers(text: str) -> str:
     """
-    Wrap <thinking>...</thinking> sections in Discord spoiler tags (||).
+    Wrap thinking sections in Discord spoiler tags (||).
     This hides reasoning content behind a clickable black bar.
+    Handles multiple formats: XML-style tags, markdown code blocks with unicode headers.
     """
     import re
-    # Match thinking tags (with or without attributes like <thinking type="reasoning">)
-    pattern = r'<thinking[^>]*>(.*?)</thinking>'
-    
+
+    # Pattern 1: XML-style <thinking>...</thinking> tags (with or without attributes)
+    xml_pattern = r'<thinking[^>]*>(.*?)</thinking>'
+
+    # Pattern 2: Markdown code blocks with unicode "𝕥𝕙𝕚𝕟𝕜𝕚𝕟𝕘" header
+    # Matches: ```\n𝕥𝕙𝕚𝕟𝕜𝕚𝕟𝕘\n...content...\n```
+    unicode_pattern = r'```\n𝕥𝕙𝕚𝕟𝕜𝕚𝕟𝕘\n(.*?)\n```'
+
+    # Pattern 3: Plain text blocks starting with "thinking" or "𝕥𝕙𝕚𝕟𝕜𝕚𝕟𝕘" followed by newline
+    plain_pattern = r'^(𝕥𝕙𝕚𝕟𝕜𝕚𝕟𝕘|thinking)[ \t]*\n(.*?)(?=\n\n|\Z)'
+
     def wrap_in_spoilers(match):
-        content = match.group(1).strip()
-        if not content:
+        content = match.group(1).strip() if len(match.groups()) > 0 else match.group(0).strip()
+        if not content or content.lower() in ('thinking', '𝕥𝕙𝕚𝕟𝕜𝕚𝕟𝕘'):
             return ""
         # Wrap in Discord spoiler syntax - adds a label to indicate it's reasoning
         return f"||🧠 *thinking*: {content}||"
-    
-    return re.sub(pattern, wrap_in_spoilers, text, flags=re.DOTALL)
+
+    # Apply all patterns
+    result = re.sub(xml_pattern, wrap_in_spoilers, text, flags=re.DOTALL | re.IGNORECASE)
+    result = re.sub(unicode_pattern, wrap_in_spoilers, result, flags=re.DOTALL | re.IGNORECASE)
+    result = re.sub(plain_pattern, wrap_in_spoilers, result, flags=re.DOTALL | re.IGNORECASE | re.MULTILINE)
+
+    return result
 
 
 @dataclass
@@ -584,8 +598,8 @@ class ChatManager:
         # Add current message
         messages.append({"role": "user", "content": message_content})
         
-        # Store user message in memory
-        self.memory.add_message(
+        # Store user message in memory (async version to avoid blocking)
+        await self.memory.add_message_async(
             session.conversation_id,
             user_id,
             "user",
@@ -622,8 +636,8 @@ class ChatManager:
             # Format response
             response = self.personality.format_response(response, persona)
             
-            # Store assistant response in memory
-            self.memory.add_message(
+            # Store assistant response in memory (async version to avoid blocking)
+            await self.memory.add_message_async(
                 session.conversation_id,
                 user_id,
                 "assistant",
@@ -676,6 +690,18 @@ class ChatManager:
             logger.warning(f"No system message in conversation! Persona: {session.persona_key}")
 
         # Build the payload for llm_task
+        # Include website tools explicitly so Urgo can use them
+        website_tools = [
+            "website_init",
+            "website_write_file",
+            "website_read_file",
+            "website_list_files",
+            "website_create_post",
+            "website_create_knowledge_page",
+            "website_update_about",
+            "website_get_stats",
+        ]
+
         payload_obj = {
             "prompt": current_prompt,
             "conversation_history": [
@@ -685,6 +711,7 @@ class ChatManager:
             "persona": session.persona_key,
             "temperature": voice_settings.get("temperature", 0.7),
             "max_tokens": voice_settings.get("max_tokens", 2000),
+            "tools": website_tools,
         }
 
         payload_json = json.dumps(payload_obj)

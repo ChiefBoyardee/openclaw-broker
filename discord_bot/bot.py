@@ -32,6 +32,7 @@ try:
         handle_conversations_command,
         handle_website_command,
         handle_website_post_command,
+        format_thinking_as_spoilers,
     )
     from .memory import get_memory
     from .self_memory import get_self_memory
@@ -375,6 +376,9 @@ async def _run_job_and_reply(
                             display = "(no final answer)" + (
                                 " — max steps reached." if parsed.get("safety", {}).get("max_steps_reached") else ""
                             )
+                        # Apply thinking block formatting to hide reasoning content
+                        if HAS_CONVERSATION_FEATURES:
+                            display = format_thinking_as_spoilers(display)
             except (json.JSONDecodeError, KeyError, TypeError):
                 pass
             display = truncate_for_display(redact(display), job_id)

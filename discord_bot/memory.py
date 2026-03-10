@@ -225,20 +225,54 @@ class ConversationMemory:
         logger.info(f"Initialized conversation memory database: {self.db_path}")
     
     def _get_embedding(self, text: str) -> Optional[bytes]:
-        """Generate embedding for text if provider is available."""
+        """Generate embedding for text if provider is available (sync version)."""
         if not self.embedding_provider:
             return None
 
         try:
             # Handle both EmbeddingProvider interface and callable
-            import asyncio
-            
             if HAS_EMBEDDINGS and isinstance(self.embedding_provider, EmbeddingProvider):
-                # Always use sync path in sync context
                 embedding = self.embedding_provider.embed_sync(text)
             else:
                 # Legacy callable interface
                 embedding = self.embedding_provider(text)
+            
+            if embedding is None:
+                return None
+            
+            if HAS_NUMPY and isinstance(embedding, np.ndarray):
+                return embedding.tobytes()
+            elif isinstance(embedding, (list, tuple)):
+                return np.array(embedding, dtype=np.float32).tobytes()
+            return embedding
+        except Exception as e:
+            logger.error(f"Failed to generate embedding: {e}")
+            return None
+    
+    async def _get_embedding_async(self, text: str) -> Optional[bytes]:
+        """Generate embedding for text if provider is available (async version)."""
+        if not self.embedding_provider:
+            return None
+
+        try:
+            import asyncio
+            
+            if HAS_EMBEDDINGS and isinstance(self.embedding_provider, EmbeddingProvider):
+                # Use async version if available, otherwise run sync in executor
+                if hasattr(self.embedding_provider, 'embed_async'):
+                    embedding = await self.embedding_provider.embed_async(text)
+                else:
+                    # Run sync version in thread pool to avoid blocking
+                    loop = asyncio.get_running_loop()
+                    embedding = await loop.run_in_executor(
+                        None, self.embedding_provider.embed_sync, text
+                    )
+            else:
+                # Legacy callable interface - run in thread pool
+                loop = asyncio.get_running_loop()
+                embedding = await loop.run_in_executor(
+                    None, self.embedding_provider, text
+                )
             
             if embedding is None:
                 return None
@@ -284,7 +318,7 @@ class ConversationMemory:
                     role: str, content: str, 
                     metadata: Optional[Dict] = None) -> int:
         """
-        Add a message to conversation history.
+        Add a message to conversation history (sync version).
         
         Returns:
             Message ID
@@ -305,7 +339,7 @@ class ConversationMemory:
         
         message_id = cursor.lastrowid
         
-        # Store embedding if available
+        # Store embedding if available (sync version)
         embedding = self._get_embedding(content)
         if embedding:
             self.db.execute("""
@@ -318,6 +352,51 @@ class ConversationMemory:
         # Check if we should create summary or extract knowledge
         self._maybe_create_summary(conversation_id)
         self._maybe_extract_knowledge(user_id, conversation_id)
+        
+        return message_id
+    
+    async def add_message_async(self, conversation_id: str, user_id: str, 
+                                 role: str, content: str, 
+                                 metadata: Optional[Dict] = None) -> int:
+        """
+        Add a message to conversation history (async version - non-blocking).
+        
+        Returns:
+            Message ID
+        """
+        import asyncio
+        
+        timestamp = time.time()
+        token_count = len(content.split())  # Rough approximation
+        
+        # Calculate importance score
+        importance = self._calculate_importance(content, role)
+        
+        # Insert message
+        cursor = self.db.execute("""
+            INSERT INTO conversations 
+            (conversation_id, user_id, role, content, timestamp, token_count, importance_score, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (conversation_id, user_id, role, content, timestamp, 
+              token_count, importance, json.dumps(metadata) if metadata else None))
+        
+        message_id = cursor.lastrowid
+        
+        # Store embedding if available (async version - non-blocking)
+        embedding = await self._get_embedding_async(content)
+        if embedding:
+            self.db.execute("""
+                INSERT INTO message_embeddings (message_id, embedding)
+                VALUES (?, ?)
+            """, (message_id, embedding))
+        
+        self.db.commit()
+        
+        # Check if we should create summary or extract knowledge
+        # Run these in thread pool to avoid blocking
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._maybe_create_summary, conversation_id)
+        await loop.run_in_executor(None, self._maybe_extract_knowledge, user_id, conversation_id)
         
         return message_id
     
