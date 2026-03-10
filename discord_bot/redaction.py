@@ -42,10 +42,13 @@ def redact_expanded(text: str, bot_token: Optional[str] = None, discord_token: O
     out = text
     bt = bot_token if bot_token is not None else os.environ.get("BOT_TOKEN", "")
     dt = discord_token if discord_token is not None else os.environ.get("DISCORD_TOKEN", "")
+    wt = os.environ.get("WORKER_TOKEN", "")
     if bt:
         out = out.replace(bt, "***")
     if dt:
         out = out.replace(dt, "***")
+    if wt:
+        out = out.replace(wt, "***")
     for pattern, replacement in CREDENTIAL_PATTERNS:
         out = pattern.sub(replacement, out)
     return out

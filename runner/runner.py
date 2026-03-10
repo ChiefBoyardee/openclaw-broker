@@ -12,12 +12,15 @@ import subprocess
 import sys
 import time
 import uuid
+import logging
 
 import requests
 
 from runner.llm_config import get_llm_config
 from runner.llm_loop import run_llm_tool_loop
 from runner.redaction import redact_output, should_redact_output
+
+logger = logging.getLogger(__name__)
 
 # --- Config from env ---
 BROKER_URL = os.environ.get("BROKER_URL", "http://127.0.0.1:8000").strip().rstrip("/")
@@ -306,27 +309,31 @@ def _post_with_retry(method: str, url: str, headers: dict, json_body: dict, time
             if r.status_code == 200:
                 return True
             if 400 <= r.status_code < 500:
-                print(f"[runner] {method} {r.status_code}: {r.text}", file=sys.stderr)
+                logger.warning(f"[{method}] {r.status_code}: {r.text}")
                 return False
             # 5xx or other
-            print(f"[runner] {method} {r.status_code} (attempt {attempt + 1}/{RESULT_RETRY_ATTEMPTS})", file=sys.stderr)
+            logger.warning(f"[{method}] {r.status_code} (attempt {attempt + 1}/{RESULT_RETRY_ATTEMPTS})")
         except requests.RequestException as e:
-            print(f"[runner] {method} request error (attempt {attempt + 1}/{RESULT_RETRY_ATTEMPTS}): {e}", file=sys.stderr)
+            logger.warning(f"[{method}] request error (attempt {attempt + 1}/{RESULT_RETRY_ATTEMPTS}): {e}")
         if attempt < RESULT_RETRY_ATTEMPTS - 1:
             time.sleep(RESULT_RETRY_BACKOFF[attempt])
     return False
 
 
 def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
     if not WORKER_TOKEN:
-        print("[runner] ERROR: WORKER_TOKEN not set", file=sys.stderr)
+        logger.error("WORKER_TOKEN not set")
         sys.exit(1)
     _ensure_plans_dir()
     caps_list = _worker_caps_list()
     headers = {"X-Worker-Token": WORKER_TOKEN, "X-Worker-Id": WORKER_ID}
     if caps_list:
         headers["X-Worker-Caps"] = json.dumps(caps_list)
-    print(f"[runner] started; broker={BROKER_URL} worker_id={WORKER_ID} poll_interval={POLL_INTERVAL_SEC}s caps={caps_list}")
+    logger.info(f"started; broker={BROKER_URL} worker_id={WORKER_ID} poll_interval={POLL_INTERVAL_SEC}s caps={caps_list}")
     while True:
         try:
             r = requests.get(f"{BROKER_URL}/jobs/next", headers=headers, timeout=30)
@@ -339,7 +346,7 @@ def main():
             job_id = job["id"]
             command = job.get("command", "")
             payload = job.get("payload", "")
-            print(f"[runner] claimed job id={job_id} command={command}")
+            logger.info(f"claimed job id={job_id} command={command}")
 
             try:
                 result = run_job(command, payload)
@@ -352,12 +359,13 @@ def main():
                     {"result": result},
                 )
                 if ok:
-                    print(f"[runner] result posted id={job_id}")
+                    logger.info(f"result posted id={job_id}")
             except Exception as e:
+                logger.exception("job failed with exception")
                 err_msg = str(e) or "unknown"
                 if should_redact_output():
                     err_msg = redact_output(err_msg)
-                print(f"[runner] job failed: {err_msg}", file=sys.stderr)
+                logger.error(f"job failed: {err_msg}")
                 ok = _post_with_retry(
                     "fail",
                     f"{BROKER_URL}/jobs/{job_id}/fail",
@@ -365,13 +373,13 @@ def main():
                     {"error": err_msg},
                 )
                 if ok:
-                    print(f"[runner] fail posted id={job_id}")
+                    logger.info(f"fail posted id={job_id}")
 
         except requests.RequestException as e:
-            print(f"[runner] request error: {e}", file=sys.stderr)
+            logger.warning(f"request error: {e}")
             time.sleep(POLL_INTERVAL_SEC)
         except Exception as e:
-            print(f"[runner] error: {e}", file=sys.stderr)
+            logger.exception(f"unexpected polling error: {e}")
             time.sleep(POLL_INTERVAL_SEC)
 
 
@@ -392,6 +400,33 @@ def run_job(command: str, payload: str) -> str:
             "repo_grep",
             "repo_readfile",
         ]
+        # Add browser capabilities if playwright is available
+        try:
+            from runner.browser_tools import get_browser_capabilities
+            browser_caps = get_browser_capabilities()
+            for cap in browser_caps:
+                if cap not in caps:
+                    caps.append(cap)
+        except ImportError:
+            pass
+        # Add GitHub capabilities
+        try:
+            from runner.github_tools import get_github_capabilities
+            github_caps = get_github_capabilities()
+            for cap in github_caps:
+                if cap not in caps:
+                    caps.append(cap)
+        except ImportError:
+            pass
+        # Add VPS website capabilities
+        try:
+            from runner.vps_website_tools import get_vps_website_capabilities
+            vps_caps = get_vps_website_capabilities()
+            for cap in vps_caps:
+                if cap not in caps:
+                    caps.append(cap)
+        except ImportError:
+            pass
         worker_caps = _worker_caps_list()
         if "llm_task" not in caps:
             caps.append("llm_task")
@@ -488,6 +523,25 @@ def run_job(command: str, payload: str) -> str:
         if max_steps < 1:
             max_steps = 1
         # Bridge for tool_registry.dispatch: methods + allowed_tools, worker_id
+        # Import browser tools
+        from runner.browser_tools import (
+            browser_navigate, browser_snapshot, browser_click, browser_type,
+            browser_search, browser_extract_article, browser_close,
+            get_browser_capabilities
+        )
+        # Import GitHub tools
+        from runner.github_tools import (
+            github_create_repo, github_list_repos, github_create_issue, github_list_issues,
+            github_read_file, github_write_file, github_search_repos, github_search_code,
+            github_get_user, get_github_capabilities
+        )
+        # Import VPS website tools
+        from runner.vps_website_tools import (
+            website_init, website_write_file, website_read_file, website_list_files,
+            website_create_post, website_create_knowledge_page, website_update_about,
+            website_get_stats, get_vps_website_capabilities
+        )
+
         class _Bridge:
             allowed_tools = allowed_set
             worker_id = WORKER_ID
@@ -505,6 +559,59 @@ def run_job(command: str, payload: str) -> str:
                 return _plan_echo_impl(text)
             def approve_echo(_self, plan_id: str):
                 return _approve_echo_impl(plan_id)
+            # Browser tools
+            def browser_navigate(_self, url: str, wait_for_load: bool = True):
+                return browser_navigate(url, wait_for_load)
+            def browser_snapshot(_self, full_content: bool = True):
+                return browser_snapshot(full_content)
+            def browser_click(_self, ref: Optional[int] = None, selector: Optional[str] = None):
+                return browser_click(ref, selector)
+            def browser_type(_self, text: str, ref: Optional[int] = None, selector: Optional[str] = None, submit: bool = False):
+                return browser_type(text, ref, selector, submit)
+            def browser_search(_self, query: str, engine: str = "google"):
+                return browser_search(query, engine)
+            def browser_extract_article(_self):
+                return browser_extract_article()
+            def browser_close(_self):
+                return browser_close()
+            # GitHub tools
+            def github_create_repo(_self, name: str, description: str = "", private: bool = False,
+                                  auto_init: bool = True, gitignore_template: str = ""):
+                return github_create_repo(name, description, private, auto_init, gitignore_template)
+            def github_list_repos(_self, type_filter: str = "owner", sort: str = "updated", limit: int = 30):
+                return github_list_repos(type_filter, sort, limit)
+            def github_create_issue(_self, repo: str, title: str, body: str = "", labels: Optional[list] = None):
+                return github_create_issue(repo, title, body, labels)
+            def github_list_issues(_self, repo: str, state: str = "open", limit: int = 30):
+                return github_list_issues(repo, state, limit)
+            def github_read_file(_self, repo: str, path: str, ref: str = "main"):
+                return github_read_file(repo, path, ref)
+            def github_write_file(_self, repo: str, path: str, content: str, message: str,
+                                 branch: str = "main", sha: Optional[str] = None):
+                return github_write_file(repo, path, content, message, branch, sha)
+            def github_search_repos(_self, query: str, sort: str = "stars", order: str = "desc", limit: int = 30):
+                return github_search_repos(query, sort, order, limit)
+            def github_search_code(_self, query: str, limit: int = 30):
+                return github_search_code(query, limit)
+            def github_get_user(_self, username: Optional[str] = None):
+                return github_get_user(username)
+            # VPS Website tools
+            def website_init(_self, site_title: str = "Urgo's Digital Garden", description: str = "A collection of thoughts, learnings, and discoveries."):
+                return website_init(site_title, description)
+            def website_write_file(_self, path: str, content: str, append: bool = False):
+                return website_write_file(path, content, append)
+            def website_read_file(_self, path: str):
+                return website_read_file(path)
+            def website_list_files(_self, directory: str = "", recursive: bool = False):
+                return website_list_files(directory, recursive)
+            def website_create_post(_self, title: str, content: str, category: str = "general", tags: Optional[list] = None):
+                return website_create_post(title, content, category, tags)
+            def website_create_knowledge_page(_self, title: str, content: str, category: str = "general", source: Optional[str] = None):
+                return website_create_knowledge_page(title, content, category, source)
+            def website_update_about(_self, biography: Optional[str] = None, interests: Optional[list] = None, current_goals: Optional[list] = None):
+                return website_update_about(biography, interests, current_goals)
+            def website_get_stats(_self):
+                return website_get_stats()
         bridge = _Bridge()
         envelope = run_llm_tool_loop(prompt, tools_list, repo_context, max_steps, config, bridge)
         return json.dumps(envelope)

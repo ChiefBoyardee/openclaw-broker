@@ -4,7 +4,10 @@ LLM tool loop for llm_task command (Sprint 5). Calls LLM with tools, dispatches 
 from __future__ import annotations
 
 import sys
+import logging
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 from runner.llm_client import chat_with_tools
 from runner.tool_registry import dispatch, get_tools_schema, parse_tool_args
@@ -115,7 +118,7 @@ def run_llm_tool_loop(
                 if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
                     final_text = "Job stopped: policy limits exceeded."
                     safety["reason"] = "policy_refused"
-                    print("event=llm_task_policy_refused job_stopped=policy_limits", file=sys.stderr)
+                    logger.warning("event=llm_task_policy_refused job_stopped=policy_limits")
                     break
                 continue
             try:
@@ -131,7 +134,7 @@ def run_llm_tool_loop(
                 if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
                     final_text = "Job stopped: policy limits exceeded."
                     safety["reason"] = "policy_refused"
-                    print("event=llm_task_policy_refused job_stopped=policy_limits", file=sys.stderr)
+                    logger.warning("event=llm_task_policy_refused job_stopped=policy_limits")
                     break
                 continue
             try:
@@ -148,7 +151,7 @@ def run_llm_tool_loop(
                 if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
                     final_text = "Job stopped: policy limits exceeded."
                     safety["reason"] = "policy_refused"
-                    print("event=llm_task_policy_refused job_stopped=policy_limits", file=sys.stderr)
+                    logger.warning("event=llm_task_policy_refused job_stopped=policy_limits")
                     break
                 continue
             consecutive_refusals = 0  # Success resets

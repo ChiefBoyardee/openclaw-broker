@@ -116,6 +116,367 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             },
         },
     },
+    # Browser/Web tools
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_navigate",
+            "description": "Navigate to a URL in the browser. Creates a browser session if needed.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL to navigate to (can be partial, will add https:// if needed)"},
+                    "wait_for_load": {"type": "boolean", "description": "Wait for page to fully load", "default": True},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_snapshot",
+            "description": "Take a snapshot of the current page including content, links, forms, and interactive elements.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "full_content": {"type": "boolean", "description": "Include full page content", "default": True},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_click",
+            "description": "Click an element on the page by reference number or CSS selector.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "integer", "description": "Reference number from browser_snapshot interactive_elements"},
+                    "selector": {"type": "string", "description": "CSS selector as alternative to ref"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_type",
+            "description": "Type text into an input field by reference or selector.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string", "description": "Text to type"},
+                    "ref": {"type": "integer", "description": "Reference number from browser_snapshot forms"},
+                    "selector": {"type": "string", "description": "CSS selector as alternative to ref"},
+                    "submit": {"type": "boolean", "description": "Press Enter after typing", "default": False},
+                },
+                "required": ["text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_search",
+            "description": "Perform a web search using a search engine.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query"},
+                    "engine": {"type": "string", "description": "Search engine: google, duckduckgo, or bing", "default": "google"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_extract_article",
+            "description": "Extract article content from current page using readability-style extraction.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "browser_close",
+            "description": "Close the browser session and free resources.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    # GitHub tools
+    {
+        "type": "function",
+        "function": {
+            "name": "github_create_repo",
+            "description": "Create a new GitHub repository for storing knowledge, projects, or content.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "description": "Repository name (required)"},
+                    "description": {"type": "string", "description": "Repository description"},
+                    "private": {"type": "boolean", "description": "Whether the repo should be private", "default": False},
+                    "auto_init": {"type": "boolean", "description": "Initialize with README", "default": True},
+                    "gitignore_template": {"type": "string", "description": "Gitignore template (e.g., 'Python', 'Node')"},
+                },
+                "required": ["name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_list_repos",
+            "description": "List repositories for the authenticated user.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "type_filter": {"type": "string", "description": "Filter: all, owner, member", "default": "owner"},
+                    "sort": {"type": "string", "description": "Sort by: created, updated, pushed, full_name", "default": "updated"},
+                    "limit": {"type": "integer", "description": "Maximum repos to return", "default": 30},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_create_issue",
+            "description": "Create an issue in a GitHub repository to track tasks, goals, or findings.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository in format 'owner/repo' (required)"},
+                    "title": {"type": "string", "description": "Issue title (required)"},
+                    "body": {"type": "string", "description": "Issue body/description"},
+                    "labels": {"type": "array", "items": {"type": "string"}, "description": "List of label names"},
+                },
+                "required": ["repo", "title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_list_issues",
+            "description": "List issues in a GitHub repository.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository in format 'owner/repo' (required)"},
+                    "state": {"type": "string", "description": "Issue state: open, closed, all", "default": "open"},
+                    "limit": {"type": "integer", "description": "Maximum issues to return", "default": 30},
+                },
+                "required": ["repo"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_read_file",
+            "description": "Read a file from a GitHub repository.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository in format 'owner/repo' (required)"},
+                    "path": {"type": "string", "description": "File path within repo (required)"},
+                    "ref": {"type": "string", "description": "Branch, tag, or commit SHA", "default": "main"},
+                },
+                "required": ["repo", "path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_write_file",
+            "description": "Create or update a file in a GitHub repository.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "repo": {"type": "string", "description": "Repository in format 'owner/repo' (required)"},
+                    "path": {"type": "string", "description": "File path within repo (required)"},
+                    "content": {"type": "string", "description": "File content (required)"},
+                    "message": {"type": "string", "description": "Commit message (required)"},
+                    "branch": {"type": "string", "description": "Target branch", "default": "main"},
+                    "sha": {"type": "string", "description": "SHA of existing file (required for updates)"},
+                },
+                "required": ["repo", "path", "content", "message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_search_repos",
+            "description": "Search for repositories on GitHub.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query (required). Can include qualifiers like language:python, topic:machine-learning"},
+                    "sort": {"type": "string", "description": "Sort by: stars, forks, updated", "default": "stars"},
+                    "order": {"type": "string", "description": "Sort order: desc, asc", "default": "desc"},
+                    "limit": {"type": "integer", "description": "Maximum results", "default": 30},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_search_code",
+            "description": "Search for code on GitHub.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Search query (required). Can include qualifiers like repo:owner/name, language:python, path:src"},
+                    "limit": {"type": "integer", "description": "Maximum results", "default": 30},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "github_get_user",
+            "description": "Get GitHub user information.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "username": {"type": "string", "description": "GitHub username (if empty, gets authenticated user)"},
+                },
+                "required": [],
+            },
+        },
+    },
+    # VPS Website tools
+    {
+        "type": "function",
+        "function": {
+            "name": "website_init",
+            "description": "Initialize a new website for Urgo. Creates base structure, CSS, and initial pages.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "site_title": {"type": "string", "description": "Title of the website", "default": "Urgo's Digital Garden"},
+                    "description": {"type": "string", "description": "Site description/meta", "default": "A collection of thoughts, learnings, and discoveries."},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "website_write_file",
+            "description": "Write content to a file in the website.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path within website (required)"},
+                    "content": {"type": "string", "description": "File content (required)"},
+                    "append": {"type": "boolean", "description": "Whether to append or overwrite", "default": False},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "website_read_file",
+            "description": "Read a file from the website.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Relative path within website (required)"},
+                },
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "website_list_files",
+            "description": "List files in the website directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "directory": {"type": "string", "description": "Relative directory path", "default": ""},
+                    "recursive": {"type": "boolean", "description": "List recursively", "default": False},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "website_create_post",
+            "description": "Create a new blog post on the website.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Post title (required)"},
+                    "content": {"type": "string", "description": "Post content, markdown or HTML (required)"},
+                    "category": {"type": "string", "description": "Post category", "default": "general"},
+                    "tags": {"type": "array", "items": {"type": "string"}, "description": "List of tags"},
+                },
+                "required": ["title", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "website_create_knowledge_page",
+            "description": "Create a knowledge base page on the website.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Page title (required)"},
+                    "content": {"type": "string", "description": "Page content (required)"},
+                    "category": {"type": "string", "description": "Knowledge category", "default": "general"},
+                    "source": {"type": "string", "description": "Source of this knowledge"},
+                },
+                "required": ["title", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "website_update_about",
+            "description": "Update the about page with current information.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "biography": {"type": "string", "description": "Updated biography text"},
+                    "interests": {"type": "array", "items": {"type": "string"}, "description": "List of current interests"},
+                    "current_goals": {"type": "array", "items": {"type": "string"}, "description": "List of current goals"},
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "website_get_stats",
+            "description": "Get website statistics (file counts, etc.).",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
 ]
 
 
@@ -185,6 +546,169 @@ def dispatch(
         if not plan_id:
             raise ValueError("plan_id required")
         return runner_bridge.approve_echo(plan_id)
+    # Browser tools
+    if name == "browser_navigate":
+        url = args.get("url", "")
+        if not url:
+            raise ValueError("url required")
+        wait_for_load = args.get("wait_for_load", True)
+        return runner_bridge.browser_navigate(url, wait_for_load)
+    if name == "browser_snapshot":
+        full_content = args.get("full_content", True)
+        return runner_bridge.browser_snapshot(full_content)
+    if name == "browser_click":
+        ref = args.get("ref")
+        selector = args.get("selector", "")
+        return runner_bridge.browser_click(ref, selector or None)
+    if name == "browser_type":
+        text = args.get("text", "")
+        if not text:
+            raise ValueError("text required")
+        ref = args.get("ref")
+        selector = args.get("selector", "")
+        submit = args.get("submit", False)
+        return runner_bridge.browser_type(text, ref, selector or None, submit)
+    if name == "browser_search":
+        query = args.get("query", "")
+        if not query:
+            raise ValueError("query required")
+        engine = args.get("engine", "google")
+        return runner_bridge.browser_search(query, engine)
+    if name == "browser_extract_article":
+        return runner_bridge.browser_extract_article()
+    if name == "browser_close":
+        return runner_bridge.browser_close()
+    # GitHub tools
+    if name == "github_create_repo":
+        repo_name = args.get("name", "")
+        if not repo_name:
+            raise ValueError("name required")
+        return runner_bridge.github_create_repo(
+            repo_name,
+            args.get("description", ""),
+            args.get("private", False),
+            args.get("auto_init", True),
+            args.get("gitignore_template", "")
+        )
+    if name == "github_list_repos":
+        return runner_bridge.github_list_repos(
+            args.get("type_filter", "owner"),
+            args.get("sort", "updated"),
+            args.get("limit", 30)
+        )
+    if name == "github_create_issue":
+        repo = args.get("repo", "")
+        title = args.get("title", "")
+        if not repo or not title:
+            raise ValueError("repo and title required")
+        return runner_bridge.github_create_issue(
+            repo,
+            title,
+            args.get("body", ""),
+            args.get("labels")
+        )
+    if name == "github_list_issues":
+        repo = args.get("repo", "")
+        if not repo:
+            raise ValueError("repo required")
+        return runner_bridge.github_list_issues(
+            repo,
+            args.get("state", "open"),
+            args.get("limit", 30)
+        )
+    if name == "github_read_file":
+        repo = args.get("repo", "")
+        path = args.get("path", "")
+        if not repo or not path:
+            raise ValueError("repo and path required")
+        return runner_bridge.github_read_file(
+            repo,
+            path,
+            args.get("ref", "main")
+        )
+    if name == "github_write_file":
+        repo = args.get("repo", "")
+        path = args.get("path", "")
+        content = args.get("content", "")
+        message = args.get("message", "")
+        if not repo or not path or not content or not message:
+            raise ValueError("repo, path, content, and message required")
+        return runner_bridge.github_write_file(
+            repo,
+            path,
+            content,
+            message,
+            args.get("branch", "main"),
+            args.get("sha")
+        )
+    if name == "github_search_repos":
+        query = args.get("query", "")
+        if not query:
+            raise ValueError("query required")
+        return runner_bridge.github_search_repos(
+            query,
+            args.get("sort", "stars"),
+            args.get("order", "desc"),
+            args.get("limit", 30)
+        )
+    if name == "github_search_code":
+        query = args.get("query", "")
+        if not query:
+            raise ValueError("query required")
+        return runner_bridge.github_search_code(query, args.get("limit", 30))
+    if name == "github_get_user":
+        return runner_bridge.github_get_user(args.get("username"))
+    # VPS Website tools
+    if name == "website_init":
+        return runner_bridge.website_init(
+            args.get("site_title", "Urgo's Digital Garden"),
+            args.get("description", "A collection of thoughts, learnings, and discoveries.")
+        )
+    if name == "website_write_file":
+        path = args.get("path", "")
+        content = args.get("content", "")
+        if not path:
+            raise ValueError("path required")
+        if content == "":
+            raise ValueError("content required")
+        return runner_bridge.website_write_file(path, content, args.get("append", False))
+    if name == "website_read_file":
+        path = args.get("path", "")
+        if not path:
+            raise ValueError("path required")
+        return runner_bridge.website_read_file(path)
+    if name == "website_list_files":
+        return runner_bridge.website_list_files(args.get("directory", ""), args.get("recursive", False))
+    if name == "website_create_post":
+        title = args.get("title", "")
+        content = args.get("content", "")
+        if not title or not content:
+            raise ValueError("title and content required")
+        return runner_bridge.website_create_post(
+            title,
+            content,
+            args.get("category", "general"),
+            args.get("tags")
+        )
+    if name == "website_create_knowledge_page":
+        title = args.get("title", "")
+        content = args.get("content", "")
+        if not title or not content:
+            raise ValueError("title and content required")
+        return runner_bridge.website_create_knowledge_page(
+            title,
+            content,
+            args.get("category", "general"),
+            args.get("source")
+        )
+    if name == "website_update_about":
+        return runner_bridge.website_update_about(
+            args.get("biography"),
+            args.get("interests"),
+            args.get("current_goals")
+        )
+    if name == "website_get_stats":
+        return runner_bridge.website_get_stats()
     raise ValueError(f"unknown tool: {name}")
 
 

@@ -257,7 +257,7 @@ class ChatManager:
             return response
             
         except Exception as e:
-            logger.error(f"Error generating response: {e}")
+            logger.exception(f"Error generating response: {e}")
             return f"I'm having trouble thinking right now... Error: {str(e)[:100]}"
     
     async def _send_to_llm(self, messages: list, voice_settings: dict,
@@ -346,7 +346,7 @@ class ChatManager:
             logger.error(f"Broker request failed: {e}")
             return f"[Broker connection error: {str(e)[:100]}]"
         except Exception as e:
-            logger.error(f"Error in _send_to_llm: {e}")
+            logger.exception(f"Error in _send_to_llm: {e}")
             return f"[Error generating response: {str(e)[:100]}]"
     
     async def handle_persona_command(self, user_id: str, 
@@ -441,9 +441,27 @@ class ChatManager:
     async def handle_forget_command(self, user_id: str,
                                     search_term: str) -> str:
         """Forget something matching search term."""
-        # This would search and remove matching facts
-        # Simplified implementation
-        return f"🔍 Searching for '{search_term}' to forget... (implementation needed)"
+        if not self.memory:
+            return "❌ Memory system not available."
+
+        try:
+            # Search user facts for matches
+            facts = self.memory.get_user_knowledge(user_id, limit=100)
+            matches = [f for f in facts if search_term.lower() in f.content.lower()]
+
+            if not matches:
+                return f"🔍 No memories found matching '{search_term}'."
+
+            # Remove the first match
+            target = matches[0]
+            if target.id is not None:
+                self.memory.db.execute("DELETE FROM user_knowledge WHERE id = ?", (target.id,))
+                self.memory.db.commit()
+                return f"🗑️ Forgot: *{target.content[:100]}*"
+            else:
+                return "❌ Could not identify memory to remove."
+        except Exception as e:
+            return f"❌ Error forgetting: {str(e)}"
     
     async def handle_history_command(self, user_id: str,
                                      channel_id: str,

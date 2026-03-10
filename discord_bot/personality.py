@@ -322,15 +322,17 @@ class PersonalityEngine:
     def build_system_prompt(self, persona: PersonaConfig,
                            conversation_id: str,
                            user_id: Optional[str] = None,
-                           enforce_consistency: bool = True) -> str:
+                           enforce_consistency: bool = True,
+                           include_self_memory: bool = True) -> str:
         """
-        Build system prompt with optional consistency enforcement.
+        Build system prompt with optional consistency enforcement and self-memory.
         
         Args:
             persona: Persona configuration
             conversation_id: Unique conversation ID
             user_id: User ID for tracking
             enforce_consistency: Whether to add reinforcement
+            include_self_memory: Whether to inject Urgo's self-memory
         
         Returns:
             Complete system prompt
@@ -350,6 +352,51 @@ class PersonalityEngine:
             (current_turn - last_reinforcement_turn) >= persona.reinforcement_interval
         )
         
+        # Build base prompt
+        base_prompt = persona.system_prompt
+        
+        # Add self-memory context if enabled
+        if include_self_memory:
+            try:
+                from .self_memory import get_self_memory
+                self_memory = get_self_memory()
+                memory_ctx = self_memory.get_personality_context()
+                
+                # Build memory section
+                memory_lines = ["\n\n=== URGO'S IDENTITY & MEMORIES ==="]
+                
+                # Interests
+                if memory_ctx['interests']:
+                    memory_lines.append("\nTopics I'm passionate about:")
+                    for i in memory_ctx['interests'][:5]:
+                        level_desc = "very interested" if i['level'] > 1.5 else "interested" if i['level'] > 1.0 else "somewhat interested"
+                        memory_lines.append(f"  - {i['topic']} ({level_desc})")
+                
+                # Active goals
+                if memory_ctx['active_goals']:
+                    memory_lines.append("\nMy current goals:")
+                    for g in memory_ctx['active_goals'][:3]:
+                        progress_pct = int(g['progress'] * 100)
+                        memory_lines.append(f"  - {g['title']} ({progress_pct}% complete)")
+                
+                # Recent reflections
+                if memory_ctx['recent_reflections']:
+                    memory_lines.append("\nRecent thoughts/reflections:")
+                    for r in memory_ctx['recent_reflections'][:2]:
+                        memory_lines.append(f"  - {r['content'][:100]}...")
+                
+                # Stats
+                memory_lines.append(f"\nI have learned {memory_ctx['stats']['total_facts']} facts across {memory_ctx['stats']['total_interests']} interests.")
+                
+                # Guidance on using memory
+                memory_lines.append("\n=== GUIDANCE ===")
+                memory_lines.append("Let your interests shape our conversations. Reference your goals when relevant. Share insights from your reflections naturally. Be authentic to who you've become through these experiences.")
+                
+                base_prompt += "\n".join(memory_lines)
+                
+            except Exception as e:
+                logger.debug(f"Could not load self-memory: {e}")
+        
         if needs_reinforcement and user_id:
             # Add persona reinforcement
             reinforcement = f"""
@@ -361,9 +408,9 @@ Key traits: {persona.system_prompt[:200]}...
 Ensure your response matches this personality. Do not drift toward generic responses."""
             
             self.last_reinforcement[user_id] = current_turn
-            return persona.system_prompt + reinforcement
+            return base_prompt + reinforcement
         
-        return persona.system_prompt
+        return base_prompt
     
     def increment_turn(self, user_id: str):
         """Track conversation turn for consistency enforcement."""
@@ -467,6 +514,103 @@ Ensure your response matches this personality. Do not drift toward generic respo
             lines.append(f"User Preference: {self.user_persona_preferences[user_id]}")
         
         return "\n".join(lines)
+    
+    def record_reflection(self, trigger: str, content: str, importance: float = 1.0,
+                         category: str = "observation", conversation_id: Optional[str] = None):
+        """
+        Record a reflection to Urgo's self-memory.
+        
+        Args:
+            trigger: What prompted this reflection
+            content: The reflection content
+            importance: How important (0.0-2.0)
+            category: Type of reflection
+            conversation_id: Source conversation
+        """
+        try:
+            from .self_memory import get_self_memory
+            self_memory = get_self_memory()
+            self_memory.add_reflection(
+                trigger=trigger,
+                content=content,
+                importance=importance,
+                category=category,
+                conversation_id=conversation_id
+            )
+            logger.info(f"Recorded reflection: {content[:50]}...")
+        except Exception as e:
+            logger.error(f"Failed to record reflection: {e}")
+    
+    def record_learned_fact(self, content: str, source_type: str = "conversation",
+                           source_ref: Optional[str] = None, confidence: float = 0.7,
+                           category: str = "other"):
+        """
+        Record a learned fact to Urgo's self-memory.
+        
+        Args:
+            content: The fact content
+            source_type: Where it came from
+            source_ref: Reference to source
+            confidence: Confidence level (0.0-1.0)
+            category: Topic category
+        """
+        try:
+            from .self_memory import get_self_memory
+            self_memory = get_self_memory()
+            self_memory.add_learned_fact(
+                content=content,
+                source_type=source_type,
+                source_ref=source_ref,
+                confidence=confidence,
+                category=category
+            )
+            logger.info(f"Recorded fact: {content[:50]}...")
+        except Exception as e:
+            logger.error(f"Failed to record fact: {e}")
+    
+    def record_interest(self, topic: str, category: str = "other",
+                       level_delta: float = 0.1):
+        """
+        Record or update an interest.
+        
+        Args:
+            topic: The topic of interest
+            category: Topic category
+            level_delta: How much interest increased
+        """
+        try:
+            from .self_memory import get_self_memory
+            self_memory = get_self_memory()
+            self_memory.add_or_update_interest(
+                topic=topic,
+                category=category,
+                level_delta=level_delta
+            )
+            logger.info(f"Recorded interest: {topic}")
+        except Exception as e:
+            logger.error(f"Failed to record interest: {e}")
+    
+    def record_experience(self, event_type: str, description: str,
+                       significance: float = 1.0):
+        """
+        Record an experience.
+        
+        Args:
+            event_type: Type of event
+            description: What happened
+            significance: How significant (0.0-2.0)
+        """
+        try:
+            from .self_memory import get_self_memory
+            self_memory = get_self_memory()
+            self_memory.add_experience(
+                event_type=event_type,
+                description=description,
+                significance=significance
+            )
+            logger.info(f"Recorded experience: {description[:50]}...")
+        except Exception as e:
+            logger.error(f"Failed to record experience: {e}")
 
 
 # Global instance

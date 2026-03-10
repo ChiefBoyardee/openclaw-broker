@@ -55,6 +55,33 @@ ALLOWED_COMMANDS = frozenset({
     "repo_grep",
     "repo_readfile",
     "llm_task",
+    # Browser tools
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_click",
+    "browser_type",
+    "browser_search",
+    "browser_extract_article",
+    "browser_close",
+    # GitHub tools
+    "github_create_repo",
+    "github_list_repos",
+    "github_create_issue",
+    "github_list_issues",
+    "github_read_file",
+    "github_write_file",
+    "github_search_repos",
+    "github_search_code",
+    "github_get_user",
+    # VPS Website tools
+    "website_init",
+    "website_write_file",
+    "website_read_file",
+    "website_list_files",
+    "website_create_post",
+    "website_create_knowledge_page",
+    "website_update_about",
+    "website_get_stats",
 })
 
 

@@ -1,0 +1,18 @@
+# Enhanced Runner Dependencies for Urgo
+# Install with: pip install -r requirements-runner-enhanced.txt
+
+# Browser automation
+playwright>=1.40.0
+
+# HTTP client (already in base requirements, but ensuring version)
+requests>=2.31.0
+
+# Note: GitHub tools use only standard library (urllib)
+# Note: VPS website tools use only standard library
+
+# Optional: For better async support
+# asyncio is part of standard library in Python 3.7+
+
+# Optional: For embedding support (if using local embeddings)
+# sentence-transformers>=2.2.0
+# numpy>=1.24.0

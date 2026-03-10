@@ -256,17 +256,17 @@ client = discord.Client(intents=intents)
 @client.event
 async def on_ready():
     bot_id = str(client.user.id) if client.user else "?"
-    print(f"[bot] logged in as {client.user} (id={bot_id})")
-    print(f"[bot] INSTANCE_NAME={INSTANCE_NAME} BROKER_URL={BROKER_URL}")
+    logger.info(f"logged in as {client.user} (id={bot_id})")
+    logger.info(f"INSTANCE_NAME={INSTANCE_NAME} BROKER_URL={BROKER_URL}")
     
     # Show conversation features status
     if HAS_CONVERSATION_FEATURES:
-        print("[bot] Conversation features: available")
-        print(f"[bot]   Memory enabled: {MEMORY_ENABLED}")
-        print(f"[bot]   Default persona: {DEFAULT_PERSONA}")
-        print(f"[bot]   Embeddings: {EMBEDDING_PROVIDER}")
+        logger.info("Conversation features: available")
+        logger.info(f"  Memory enabled: {MEMORY_ENABLED}")
+        logger.info(f"  Default persona: {DEFAULT_PERSONA}")
+        logger.info(f"  Embeddings: {EMBEDDING_PROVIDER}")
     else:
-        print("[bot] Conversation features: not available (import error)")
+        logger.info("Conversation features: not available (import error)")
 
 
 async def _run_job_and_reply(
@@ -650,9 +650,9 @@ def _init_conversation_features():
                         return None
                 
                 embedding_provider = openai_embed
-                print(f"[bot] OpenAI embeddings enabled ({EMBEDDING_MODEL})")
+                logger.info(f"OpenAI embeddings enabled ({EMBEDDING_MODEL})")
             except ImportError:
-                print("[bot] Warning: openai package not installed, embeddings disabled")
+                logger.warning("openai package not installed, embeddings disabled")
         
         elif EMBEDDING_PROVIDER == "local":
             # Try to use sentence-transformers or similar
@@ -670,35 +670,40 @@ def _init_conversation_features():
                         return None
                 
                 embedding_provider = local_embed
-                print("[bot] Local embeddings enabled (sentence-transformers)")
+                logger.info("Local embeddings enabled (sentence-transformers)")
             except ImportError:
-                print("[bot] Warning: sentence-transformers not installed, local embeddings disabled")
-                print("[bot] Install with: pip install sentence-transformers")
+                logger.warning("sentence-transformers not installed, local embeddings disabled")
+                logger.warning("Install with: pip install sentence-transformers")
         
         # Initialize memory and personality (used by chat_commands when handling chat)
         get_memory(MEMORY_DB_PATH, embedding_provider)
         get_personality_engine(DEFAULT_PERSONA)
 
-        print(f"[bot] Conversation features enabled (memory: {MEMORY_DB_PATH}, persona: {DEFAULT_PERSONA})")
+        logger.info(f"Conversation features enabled (memory: {MEMORY_DB_PATH}, persona: {DEFAULT_PERSONA})")
         
     except Exception as e:
-        print(f"[bot] Warning: Failed to initialize conversation features: {e}")
+        logger.exception(f"Failed to initialize conversation features: {e}")
 
 
 def main():
     global _bot_instance
     
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
+
     if not DISCORD_TOKEN or not BOT_TOKEN:
-        print("[bot] ERROR: DISCORD_TOKEN and BOT_TOKEN must be set", file=sys.stderr)
+        logger.error("DISCORD_TOKEN and BOT_TOKEN must be set")
         sys.exit(1)
     if not ALLOWLIST_IDS:
-        print("[bot] ERROR: At least one of ALLOWED_USER_ID or ALLOWLIST_USER_ID must be set", file=sys.stderr)
+        logger.error("At least one of ALLOWED_USER_ID or ALLOWLIST_USER_ID must be set")
         sys.exit(1)
 
-    print(f"[bot] Allowlist: {len(ALLOWLIST_IDS)} user ID(s) configured", file=sys.stderr)
+    logger.info(f"Allowlist: {len(ALLOWLIST_IDS)} user ID(s) configured")
     if os.environ.get("ALLOWLIST_DEBUG", "").strip().lower() in ("1", "true", "yes"):
         for aid in sorted(ALLOWLIST_IDS):
-            print(f"[bot] ALLOWLIST_IDS entry: {repr(aid)} (len={len(aid)})", file=sys.stderr)
+            logger.debug(f"ALLOWLIST_IDS entry: {repr(aid)} (len={len(aid)})")
     
     # Initialize conversation features
     _init_conversation_features()

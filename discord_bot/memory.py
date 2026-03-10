@@ -101,6 +101,7 @@ class ConversationMemory:
         
         # Enable foreign keys
         self.db.execute("PRAGMA foreign_keys = ON")
+        self.db.execute("PRAGMA journal_mode = WAL")
         
         # Conversations table
         self.db.execute("""
@@ -187,13 +188,8 @@ class ConversationMemory:
             import asyncio
             
             if HAS_EMBEDDINGS and isinstance(self.embedding_provider, EmbeddingProvider):
-                # New EmbeddingProvider interface
-                if asyncio.iscoroutinefunction(self.embedding_provider.embed):
-                    # This needs to be called with asyncio.run() but we're in sync context
-                    # Return None for now - embeddings should be generated async
-                    return None
-                else:
-                    embedding = self.embedding_provider.embed_sync(text)
+                # Always use sync path in sync context
+                embedding = self.embedding_provider.embed_sync(text)
             else:
                 # Legacy callable interface
                 embedding = self.embedding_provider(text)
@@ -218,7 +214,7 @@ class ConversationMemory:
                 vec1 = np.frombuffer(embedding1, dtype=np.float32)
                 vec2 = np.frombuffer(embedding2, dtype=np.float32)
                 return cosine_similarity(vec1.tolist(), vec2.tolist())
-            except Exception as e:
+            except (ValueError, TypeError, FloatingPointError) as e:
                 logger.error(f"Failed to calculate similarity: {e}")
                 return 0.0
         
@@ -234,7 +230,7 @@ class ConversationMemory:
             vec2 = vec2 / np.linalg.norm(vec2)
 
             return float(np.dot(vec1, vec2))
-        except Exception as e:
+        except (ValueError, TypeError, FloatingPointError) as e:
             logger.error(f"Failed to calculate similarity: {e}")
             return 0.0
     
@@ -367,7 +363,7 @@ class ConversationMemory:
             JOIN message_embeddings e ON c.id = e.message_id
             WHERE c.conversation_id = ?
             ORDER BY c.timestamp DESC
-            LIMIT 1000  # Reasonable limit for in-memory search
+            LIMIT 1000  -- Reasonable limit for in-memory search
         """, (conversation_id,))
         
         # Calculate similarities
