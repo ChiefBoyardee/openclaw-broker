@@ -27,6 +27,18 @@ fi
 sudo systemctl restart openclaw-broker
 echo "[update_vps] openclaw-broker restarted"
 
+# Bot: update systemd template so unit file changes (e.g. ExecStart) are applied
+BOT_TEMPLATE="$REPO_ROOT/deploy/systemd/openclaw-discord-bot@.service"
+if [[ -f "$BOT_TEMPLATE" ]]; then
+  for _opt in /opt/openclaw-bot-*/; do
+    [[ -d "$_opt" ]] || continue
+    sudo cp "$BOT_TEMPLATE" /etc/systemd/system/openclaw-discord-bot@.service
+    sudo systemctl daemon-reload
+    echo "[update_vps] bot systemd template updated and daemon-reloaded"
+    break
+  done
+fi
+
 # Bot instances: copy code, refresh venv, restart each
 for opt_dir in /opt/openclaw-bot-*/; do
   [[ -d "$opt_dir" ]] || continue
