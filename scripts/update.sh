@@ -60,8 +60,11 @@ if [[ -d "${REPO_ROOT}/.venv-runner" ]]; then
     
     # Restart runner service if using systemd
     if systemctl list-units --full -all | grep -Fq "openclaw-runner.service"; then
-        echo "Restarting openclaw-runner service..."
+        echo "Restarting openclaw-runner service to re-initialize LLM state..."
         run_sudo systemctl restart openclaw-runner
+        # Wait a moment for runner to reconnect and load embedding model
+        sleep 2
+        echo "Runner restarted. Embedding model will be lazy-loaded on first use."
     else
         echo "Note: openclaw-runner systemd service not found. If you run the runner manually via terminal, please restart it to apply updates."
     fi
@@ -128,3 +131,13 @@ fi
 
 echo ""
 echo "=== Update Complete! ==="
+echo ""
+echo "Services restarted:"
+echo "  - Broker: Maintains job queue (persists across restarts)"
+echo "  - Runner: LLM and embedding model re-initialized"
+echo "  - Bot: Fresh instance with updated code"
+echo ""
+echo "If persona responses are still incorrect, try clearing state:"
+echo "  sudo rm /opt/openclaw-bot-<instance>/*.db  # Clear conversation history"
+echo "  sudo systemctl restart openclaw-discord-bot@<instance>"
+echo ""
