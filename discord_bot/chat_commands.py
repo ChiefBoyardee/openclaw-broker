@@ -12,7 +12,7 @@ import os
 import time
 import asyncio
 import json
-from typing import Optional, Dict, Callable
+from typing import Optional, Dict, Callable, List
 from dataclasses import dataclass
 import logging
 
@@ -21,6 +21,25 @@ from .memory import get_memory
 from .personality import get_personality_engine
 
 logger = logging.getLogger(__name__)
+
+
+def format_thinking_as_spoilers(text: str) -> str:
+    """
+    Wrap <thinking>...</thinking> sections in Discord spoiler tags (||).
+    This hides reasoning content behind a clickable black bar.
+    """
+    import re
+    # Match thinking tags (with or without attributes like <thinking type="reasoning">)
+    pattern = r'<thinking[^>]*>(.*?)</thinking>'
+    
+    def wrap_in_spoilers(match):
+        content = match.group(1).strip()
+        if not content:
+            return ""
+        # Wrap in Discord spoiler syntax - adds a label to indicate it's reasoning
+        return f"||🧠 *thinking*: {content}||"
+    
+    return re.sub(pattern, wrap_in_spoilers, text, flags=re.DOTALL)
 
 
 @dataclass
@@ -72,55 +91,191 @@ class ChatManager:
 
         logger.info(f"Chat manager initialized (default persona: {self.personality.default_persona})")
     
-    def _get_conversation_id(self, channel_id: str, user_id: str) -> str:
-        """Generate unique conversation ID."""
-        return f"{channel_id}_{user_id}"
+    def _get_conversation_id(self, channel_id: str, user_id: str, 
+                              conversation_id: str = None) -> str:
+        """
+        Get or generate conversation ID.
+        
+        If conversation_id is provided, use it (for resuming specific conversations).
+        Otherwise, get the user's active conversation or create a new one.
+        """
+        if conversation_id:
+            return conversation_id
+        
+        # Try to get user's active conversation
+        active_conv = self.memory.get_active_conversation(user_id)
+        if active_conv:
+            # Verify this conversation is for the same channel
+            convs = self.memory.get_user_conversations(user_id, channel_id, limit=1)
+            if convs and convs[0]['conversation_id'] == active_conv:
+                return active_conv
+        
+        # Create new conversation ID
+        return f"{channel_id}_{user_id}_{int(time.time())}"
     
     def _get_or_create_session(self, user_id: str, channel_id: str,
-                               persona_key: Optional[str] = None) -> ChatSession:
-        """Get existing session or create new one."""
-        conversation_id = self._get_conversation_id(channel_id, user_id)
+                               persona_key: Optional[str] = None,
+                               conversation_id: str = None,
+                               resume_conversation: bool = True) -> ChatSession:
+        """
+        Get existing session or create new one.
         
-        # Check for existing session
-        if conversation_id in self.sessions:
-            session = self.sessions[conversation_id]
+        Args:
+            user_id: Discord user ID
+            channel_id: Discord channel ID
+            persona_key: Personality to use
+            conversation_id: Specific conversation to resume (optional)
+            resume_conversation: Whether to auto-resume last conversation
+        """
+        # Determine conversation ID
+        if conversation_id:
+            target_conv_id = conversation_id
+        elif resume_conversation:
+            # Try to resume active conversation
+            target_conv_id = self._get_conversation_id(channel_id, user_id)
+        else:
+            # Create new conversation
+            target_conv_id = f"{channel_id}_{user_id}_{int(time.time())}"
+        
+        # Check for existing session in memory
+        if target_conv_id in self.sessions:
+            session = self.sessions[target_conv_id]
             
             # Check if timed out
             if time.time() - session.last_activity > self.session_timeout:
-                logger.info(f"Session {conversation_id} timed out, creating new")
-                self._end_session(conversation_id)
+                logger.info(f"Session {target_conv_id} timed out, will refresh")
+                self._end_session(target_conv_id)
             else:
                 # Update activity
                 session.last_activity = time.time()
+                # Ensure this is set as active
+                self.memory.set_active_conversation(user_id, target_conv_id, channel_id)
                 return session
         
-        # Create new session
+        # Check if conversation exists in database
+        convs = self.memory.get_user_conversations(user_id, channel_id=channel_id, limit=10)
+        existing_conv = None
+        for conv in convs:
+            if conv['conversation_id'] == target_conv_id:
+                existing_conv = conv
+                break
+        
+        # If not found, create new conversation in database
+        if not existing_conv:
+            self.memory.create_conversation(
+                conversation_id=target_conv_id,
+                channel_id=channel_id,
+                user_id=user_id,
+                title=f"Conversation with user {user_id[:8]}...",
+                topic=None,
+                is_group=False
+            )
+            logger.info(f"Created new conversation in database: {target_conv_id}")
+        else:
+            # Resume existing conversation
+            logger.info(f"Resuming conversation: {target_conv_id} "
+                       f"(messages: {existing_conv.get('message_count', 0)})")
+        
+        # Set as active conversation
+        self.memory.set_active_conversation(user_id, target_conv_id, channel_id)
+        
+        # Get persona
         if persona_key is None:
-            # Check user preferences
             settings = self.memory.get_user_settings(user_id)
             preferred = settings.get('preferred_persona')
-            # If no preference set (None) or set to legacy 'default', use system default
             if preferred is None or preferred == 'default':
                 persona_key = self.personality.default_persona
-                logger.debug(f"No user preference, using default persona: {persona_key}")
             else:
                 persona_key = preferred
-                logger.debug(f"Using user preferred persona: {persona_key}")
         
+        # Create new session
         session = ChatSession(
             user_id=user_id,
             channel_id=channel_id,
-            conversation_id=conversation_id,
+            conversation_id=target_conv_id,
             persona_key=persona_key,
             started_at=time.time(),
             last_activity=time.time(),
-            message_count=0
+            message_count=existing_conv.get('message_count', 0) if existing_conv else 0
         )
         
-        self.sessions[conversation_id] = session
-        logger.info(f"Created new chat session: {conversation_id} with persona {persona_key}")
+        self.sessions[target_conv_id] = session
+        logger.info(f"Created/Resumed chat session: {target_conv_id} with persona {persona_key}")
         
         return session
+    
+    def switch_conversation(self, user_id: str, channel_id: str, 
+                           conversation_id: str = None) -> Optional[ChatSession]:
+        """
+        Switch to a different conversation.
+        
+        Args:
+            user_id: Discord user ID
+            channel_id: Discord channel ID
+            conversation_id: Specific conversation ID to switch to, or None to create new
+            
+        Returns:
+            The new session, or None if switch failed
+        """
+        # End current session if exists
+        current_conv = self.memory.get_active_conversation(user_id)
+        if current_conv and current_conv in self.sessions:
+            self._end_session(current_conv)
+        
+        # If no conversation_id specified, create a new conversation
+        if conversation_id is None:
+            conversation_id = f"{channel_id}_{user_id}_{int(time.time())}"
+            self.memory.create_conversation(
+                conversation_id=conversation_id,
+                channel_id=channel_id,
+                user_id=user_id,
+                title=f"New conversation {int(time.time()) % 10000}"
+            )
+        else:
+            # Verify user has access to this conversation
+            convs = self.memory.get_user_conversations(user_id, limit=100)
+            conv_ids = [c['conversation_id'] for c in convs]
+            if conversation_id not in conv_ids:
+                logger.warning(f"User {user_id} tried to access unauthorized conversation {conversation_id}")
+                return None
+        
+        # Create new session with the target conversation
+        return self._get_or_create_session(
+            user_id=user_id,
+            channel_id=channel_id,
+            conversation_id=conversation_id,
+            resume_conversation=False
+        )
+    
+    def get_user_conversations_list(self, user_id: str, channel_id: str = None) -> List[Dict]:
+        """Get formatted list of user's conversations."""
+        convs = self.memory.get_user_conversations(user_id, channel_id, limit=20)
+        active_conv = self.memory.get_active_conversation(user_id)
+        
+        result = []
+        for conv in convs:
+            # Format timestamp
+            last_activity = conv['last_activity']
+            if isinstance(last_activity, (int, float)):
+                from datetime import datetime
+                dt = datetime.fromtimestamp(last_activity)
+                time_str = dt.strftime("%Y-%m-%d %H:%M")
+            else:
+                time_str = "Unknown"
+            
+            result.append({
+                'id': conv['conversation_id'][:20] + "...",
+                'full_id': conv['conversation_id'],
+                'title': conv['title'] or "Untitled",
+                'topic': conv['topic'],
+                'messages': conv['message_count'],
+                'participants': conv['participant_count'],
+                'last_activity': time_str,
+                'is_active': conv['conversation_id'] == active_conv,
+                'is_group': conv['is_group']
+            })
+        
+        return result
     
     def _end_session(self, conversation_id: str):
         """End a chat session."""
@@ -480,6 +635,9 @@ class ChatManager:
             session.last_activity = time.time()
             self.personality.increment_turn(user_id)
             
+            # Update conversation activity in database
+            self.memory.update_conversation_activity(session.conversation_id)
+            
             # Spin off background memory extraction every 3 turns
             if session.message_count % 3 == 0:
                 asyncio.create_task(self._process_memory_background(user_id, session.conversation_id))
@@ -566,10 +724,10 @@ class ChatManager:
                     try:
                         parsed = json.loads(result)
                         if isinstance(parsed, dict):
-                            return parsed.get("final", result)
+                            return format_thinking_as_spoilers(parsed.get("final", result))
                     except json.JSONDecodeError:
                         pass
-                    return result
+                    return format_thinking_as_spoilers(result)
                     
                 if status == "failed":
                     err = job.get("error") or job.get("result") or "unknown"
@@ -702,11 +860,184 @@ class ChatManager:
         except Exception as e:
             return f"❌ Error forgetting: {str(e)}"
     
+    async def handle_conversations_command(self, user_id: str,
+                                            channel_id: str,
+                                            subcommand: str = None,
+                                            args: str = "") -> str:
+        """
+        Handle conversation management commands.
+        
+        Subcommands:
+        - (none): List all conversations
+        - new [title]: Create new conversation
+        - switch <conversation_id>: Switch to a conversation
+        - rename <title>: Rename current conversation
+        - archive <conversation_id>: Archive a conversation
+        """
+        if subcommand is None or subcommand == "list":
+            # List all conversations
+            convs = self.get_user_conversations_list(user_id, channel_id)
+            
+            if not convs:
+                return "📭 **No conversations yet.**\nStart chatting to create your first conversation!"
+            
+            lines = [f"📋 **Your Conversations** ({len(convs)} total):\n"]
+            
+            for i, conv in enumerate(convs[:10], 1):  # Show top 10
+                active_marker = "✅ " if conv['is_active'] else "   "
+                group_marker = "👥" if conv['is_group'] else "👤"
+                lines.append(
+                    f"{active_marker}{i}. **{conv['title']}** {group_marker}\n"
+                    f"   🆔 `{conv['id']}`\n"
+                    f"   💬 {conv['messages']} messages | 🕐 {conv['last_activity']}\n"
+                )
+            
+            lines.append("\n💡 **Commands:**")
+            lines.append("`conversations new [title]` - Start new conversation")
+            lines.append("`conversations switch <number>` - Switch to conversation")
+            lines.append("`conversations rename <title>` - Rename current")
+            
+            return "\n".join(lines)
+        
+        elif subcommand == "new":
+            # Create new conversation
+            title = args.strip() if args else f"Conversation {int(time.time()) % 10000}"
+            
+            # End current session
+            current_conv = self.memory.get_active_conversation(user_id)
+            if current_conv and current_conv in self.sessions:
+                self._end_session(current_conv)
+            
+            # Create new conversation
+            new_conv_id = f"{channel_id}_{user_id}_{int(time.time())}"
+            self.memory.create_conversation(
+                conversation_id=new_conv_id,
+                channel_id=channel_id,
+                user_id=user_id,
+                title=title,
+                is_group=False
+            )
+            
+            # Set as active
+            self.memory.set_active_conversation(user_id, new_conv_id, channel_id)
+            
+            return f"✅ **Created new conversation:** *{title}*\n" \
+                   f"🆔 `{new_conv_id[:20]}...`\n" \
+                   f"\n💡 Use `conversations` to see all your conversations."
+        
+        elif subcommand == "switch":
+            if not args:
+                return "❌ Please specify a conversation number or ID.\n" \
+                       "Usage: `conversations switch <number>` or `conversations switch <id>`"
+            
+            # Get user's conversations to resolve number or ID
+            convs = self.get_user_conversations_list(user_id, channel_id)
+            
+            # Try to parse as number first
+            try:
+                conv_num = int(args.strip())
+                if 1 <= conv_num <= len(convs):
+                    target_conv_id = convs[conv_num - 1]['full_id']
+                    target_title = convs[conv_num - 1]['title']
+                else:
+                    return f"❌ Invalid conversation number. You have {len(convs)} conversations."
+            except ValueError:
+                # Try to find by partial ID match
+                search = args.strip().lower()
+                matching = [c for c in convs if search in c['full_id'].lower()]
+                if len(matching) == 1:
+                    target_conv_id = matching[0]['full_id']
+                    target_title = matching[0]['title']
+                elif len(matching) > 1:
+                    return f"❌ Multiple conversations match '{args}'. Please be more specific."
+                else:
+                    return f"❌ No conversation found matching '{args}'. Use `conversations` to see available."
+            
+            # Switch to the conversation
+            new_session = self.switch_conversation(user_id, channel_id, target_conv_id)
+            
+            if new_session:
+                msg_count = new_session.message_count
+                return f"✅ **Switched to:** *{target_title}*\n" \
+                       f"💬 {msg_count} previous messages in this conversation\n" \
+                       f"🆔 `{target_conv_id[:20]}...`"
+            else:
+                return "❌ Could not switch to that conversation."
+        
+        elif subcommand == "rename":
+            if not args:
+                return "❌ Please provide a new title.\nUsage: `conversations rename <new title>`"
+            
+            current_conv = self.memory.get_active_conversation(user_id)
+            if not current_conv:
+                return "❌ No active conversation to rename."
+            
+            new_title = args.strip()
+            self.memory.rename_conversation(current_conv, new_title)
+            
+            return f"✅ **Renamed conversation to:** *{new_title}*"
+        
+        elif subcommand == "archive":
+            if not args:
+                return "❌ Please specify a conversation number or ID to archive."
+            
+            # Resolve conversation
+            convs = self.get_user_conversations_list(user_id, channel_id)
+            try:
+                conv_num = int(args.strip())
+                if 1 <= conv_num <= len(convs):
+                    target_conv_id = convs[conv_num - 1]['full_id']
+                    target_title = convs[conv_num - 1]['title']
+                else:
+                    return f"❌ Invalid conversation number."
+            except ValueError:
+                target_conv_id = args.strip()
+                target_title = target_conv_id[:20] + "..."
+            
+            # Check if trying to archive active conversation
+            current_conv = self.memory.get_active_conversation(user_id)
+            if current_conv == target_conv_id:
+                return "⚠️ Cannot archive your active conversation. Switch to another first."
+            
+            self.memory.archive_conversation(target_conv_id)
+            return f"📦 **Archived:** *{target_title}*\nThis conversation is now hidden but preserved."
+        
+        elif subcommand == "resume":
+            # Resume the most recent conversation
+            convs = self.memory.get_user_conversations(user_id, channel_id, limit=1)
+            if not convs:
+                return "📭 No conversations to resume. Start a new one with `conversations new`."
+            
+            target_conv_id = convs[0]['conversation_id']
+            target_title = convs[0]['title'] or "Untitled"
+            
+            # Check if already active
+            current_conv = self.memory.get_active_conversation(user_id)
+            if current_conv == target_conv_id:
+                return f"✅ You're already in: *{target_title}*"
+            
+            new_session = self.switch_conversation(user_id, channel_id, target_conv_id)
+            if new_session:
+                return f"✅ **Resumed:** *{target_title}*\n" \
+                       f"💬 {new_session.message_count} messages in this conversation"
+            else:
+                return "❌ Could not resume conversation."
+        
+        else:
+            return f"❌ Unknown command: `{subcommand}`.\n" \
+                   f"Available: `list`, `new`, `switch`, `rename`, `archive`, `resume`"
+    
     async def handle_history_command(self, user_id: str,
                                      channel_id: str,
                                      limit: int = 10) -> str:
         """Show recent conversation history."""
-        conversation_id = self._get_conversation_id(channel_id, user_id)
+        # Get the active conversation
+        conversation_id = self.memory.get_active_conversation(user_id)
+        
+        if not conversation_id:
+            # Fall back to creating a conversation ID if none active
+            conversation_id = f"{channel_id}_{user_id}_{int(time.time())}"
+        
         messages = self.memory.get_recent_messages(conversation_id, limit=limit)
         
         if not messages:
@@ -860,6 +1191,38 @@ async def handle_history_command(bot, message, args: str):
         str(message.author.id),
         str(message.channel.id),
         limit=limit
+    )
+    return response
+
+
+async def handle_conversations_command(bot, message, args: str):
+    """
+    Handle 'conversations' command - conversation management.
+    
+    Usage: conversations [list|new|switch|rename|archive|resume]
+    
+    Subcommands:
+        list (default)     - Show all your conversations
+        new [title]       - Create a new conversation
+        switch <number>   - Switch to a different conversation
+        rename <title>    - Rename the current conversation
+        archive <number>  - Archive a conversation
+        resume            - Resume your most recent conversation
+    """
+    broker_url = getattr(bot, 'broker_url', os.environ.get("BROKER_URL", "http://127.0.0.1:8000"))
+    bot_token = getattr(bot, 'bot_token', os.environ.get("BOT_TOKEN", ""))
+    
+    manager = get_chat_manager(bot, broker_url, bot_token)
+    
+    parts = args.strip().split(None, 1) if args else []
+    subcommand = parts[0].lower() if parts else None
+    subargs = parts[1] if len(parts) > 1 else ""
+    
+    response = await manager.handle_conversations_command(
+        str(message.author.id),
+        str(message.channel.id),
+        subcommand,
+        subargs
     )
     return response
 

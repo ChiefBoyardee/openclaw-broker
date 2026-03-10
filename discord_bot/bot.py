@@ -29,6 +29,7 @@ try:
         handle_memory_command,
         handle_remember_command,
         handle_history_command,
+        handle_conversations_command,
         handle_website_command,
         handle_website_post_command,
     )
@@ -683,6 +684,12 @@ async def on_message(message: discord.Message):
             await reply_in_chunks(message, response)
             return
         
+        if cmd == "conversations" or cmd == "conv":
+            async with message.channel.typing():
+                response = await handle_conversations_command(bot_instance(), message, payload)
+            await reply_in_chunks(message, response)
+            return
+        
         # Website management commands
         if cmd == "website":
             async with message.channel.typing():
@@ -739,6 +746,7 @@ async def on_message(message: discord.Message):
                 "`memory [status/clear/on/off]` - Memory management",
                 "`remember <fact>` - Remember a fact",
                 "`history [n]` - Show conversation history",
+                "`conversations [new/switch/rename/archive/resume]` - Manage conversations",
                 "",
                 "*(You don't need to use a command to talk to me—just say anything!)*",
             ])

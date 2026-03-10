@@ -169,11 +169,57 @@ class ConversationMemory:
             )
         """)
         
+        # Conversation metadata (for named conversations with topics)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_metadata (
+                conversation_id TEXT PRIMARY KEY,
+                channel_id TEXT NOT NULL,
+                created_by_user_id TEXT NOT NULL,
+                title TEXT,
+                topic TEXT,
+                is_group_conversation INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                message_count INTEGER DEFAULT 0,
+                created_at REAL NOT NULL,
+                last_activity REAL NOT NULL,
+                metadata TEXT  -- JSON for extensibility
+            )
+        """)
+        
+        # Conversation participants (for multi-user support)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS conversation_participants (
+                conversation_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                joined_at REAL NOT NULL,
+                last_read_timestamp REAL,
+                is_active INTEGER DEFAULT 1,
+                notification_preference TEXT DEFAULT 'all',  -- 'all', 'mentions', 'none'
+                PRIMARY KEY (conversation_id, user_id),
+                FOREIGN KEY (conversation_id) REFERENCES conversation_metadata(conversation_id) ON DELETE CASCADE
+            )
+        """)
+        
+        # User's active conversation tracking (for resumption)
+        self.db.execute("""
+            CREATE TABLE IF NOT EXISTS user_active_conversations (
+                user_id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                channel_id TEXT NOT NULL,
+                last_activity REAL NOT NULL,
+                FOREIGN KEY (conversation_id) REFERENCES conversation_metadata(conversation_id) ON DELETE CASCADE
+            )
+        """)
+        
         # Create indexes
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_conv_user ON conversations(user_id, timestamp)")
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_conv_conversation ON conversations(conversation_id, timestamp)")
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_knowledge_user ON user_knowledge(user_id, fact_type, confidence)")
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_summaries_conv ON conversation_summaries(conversation_id)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_conv_meta_channel ON conversation_metadata(channel_id, last_activity)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_conv_meta_user ON conversation_metadata(created_by_user_id, last_activity)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_participants_user ON conversation_participants(user_id, is_active)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_active_conv_user ON user_active_conversations(user_id)")
         
         self.db.commit()
         logger.info(f"Initialized conversation memory database: {self.db_path}")
@@ -743,6 +789,291 @@ class ConversationMemory:
         self.db.commit()
         logger.info(f"Cleared memory for user {user_id}")
     
+    # --- Conversation Management Methods ---
+    
+    def create_conversation(self, conversation_id: str, channel_id: str, 
+                           user_id: str, title: str = None, 
+                           topic: str = None, is_group: bool = False) -> str:
+        """
+        Create a new conversation with metadata.
+        
+        Args:
+            conversation_id: Unique ID for the conversation
+            channel_id: Discord channel ID
+            user_id: Creating user ID
+            title: Optional conversation title
+            topic: Optional topic/description
+            is_group: Whether this is a multi-user conversation
+            
+        Returns:
+            The conversation_id
+        """
+        timestamp = time.time()
+        
+        # Insert conversation metadata
+        self.db.execute("""
+            INSERT OR REPLACE INTO conversation_metadata
+            (conversation_id, channel_id, created_by_user_id, title, topic, 
+             is_group_conversation, is_active, created_at, last_activity, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+        """, (conversation_id, channel_id, user_id, title or f"Conversation with {user_id}",
+              topic, int(is_group), timestamp, timestamp,
+              json.dumps({"created_by": user_id})))
+        
+        # Add creator as participant
+        self.db.execute("""
+            INSERT OR REPLACE INTO conversation_participants
+            (conversation_id, user_id, joined_at, is_active, notification_preference)
+            VALUES (?, ?, ?, 1, 'all')
+        """, (conversation_id, user_id, timestamp))
+        
+        # Set as active conversation for this user
+        self.set_active_conversation(user_id, conversation_id, channel_id)
+        
+        self.db.commit()
+        logger.info(f"Created conversation {conversation_id} for user {user_id}")
+        return conversation_id
+    
+    def get_or_create_conversation(self, conversation_id: str, channel_id: str,
+                                    user_id: str, title: str = None) -> str:
+        """Get existing conversation or create new one."""
+        existing = self.db.execute(
+            "SELECT conversation_id FROM conversation_metadata WHERE conversation_id = ?",
+            (conversation_id,)
+        ).fetchone()
+        
+        if existing:
+            # Update activity and ensure user is participant
+            self.update_conversation_activity(conversation_id)
+            self._ensure_participant(conversation_id, user_id)
+            return conversation_id
+        
+        return self.create_conversation(conversation_id, channel_id, user_id, title)
+    
+    def _ensure_participant(self, conversation_id: str, user_id: str):
+        """Ensure a user is a participant in a conversation."""
+        existing = self.db.execute(
+            "SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?",
+            (conversation_id, user_id)
+        ).fetchone()
+        
+        if not existing:
+            self.db.execute("""
+                INSERT INTO conversation_participants
+                (conversation_id, user_id, joined_at, is_active)
+                VALUES (?, ?, ?, 1)
+            """, (conversation_id, user_id, time.time()))
+            self.db.commit()
+    
+    def get_user_conversations(self, user_id: str, channel_id: str = None,
+                              active_only: bool = True, limit: int = 10) -> List[Dict]:
+        """
+        Get all conversations for a user.
+        
+        Args:
+            user_id: The user to get conversations for
+            channel_id: Optional filter by channel
+            active_only: Only return non-archived conversations
+            limit: Max number to return
+        """
+        query = """
+            SELECT DISTINCT 
+                cm.conversation_id,
+                cm.channel_id,
+                cm.title,
+                cm.topic,
+                cm.is_group_conversation,
+                cm.message_count,
+                cm.last_activity,
+                cm.created_at,
+                (SELECT COUNT(*) FROM conversation_participants 
+                 WHERE conversation_id = cm.conversation_id) as participant_count,
+                (SELECT conversation_id FROM user_active_conversations 
+                 WHERE user_id = ?) as active_conversation_id
+            FROM conversation_metadata cm
+            JOIN conversation_participants cp ON cm.conversation_id = cp.conversation_id
+            WHERE cp.user_id = ?
+        """
+        params = [user_id, user_id]
+        
+        if channel_id:
+            query += " AND cm.channel_id = ?"
+            params.append(channel_id)
+        
+        if active_only:
+            query += " AND cm.is_active = 1"
+        
+        query += " ORDER BY cm.last_activity DESC LIMIT ?"
+        params.append(limit)
+        
+        cursor = self.db.execute(query, params)
+        conversations = []
+        
+        for row in cursor:
+            conversations.append({
+                'conversation_id': row['conversation_id'],
+                'channel_id': row['channel_id'],
+                'title': row['title'],
+                'topic': row['topic'],
+                'is_group': bool(row['is_group_conversation']),
+                'message_count': row['message_count'],
+                'last_activity': row['last_activity'],
+                'created_at': row['created_at'],
+                'participant_count': row['participant_count'],
+                'is_active_conversation': row['conversation_id'] == row['active_conversation_id']
+            })
+        
+        return conversations
+    
+    def get_active_conversation(self, user_id: str) -> Optional[str]:
+        """Get the currently active conversation for a user."""
+        cursor = self.db.execute(
+            "SELECT conversation_id FROM user_active_conversations WHERE user_id = ?",
+            (user_id,)
+        ).fetchone()
+        
+        if cursor:
+            # Verify conversation still exists and is active
+            conv = self.db.execute(
+                "SELECT 1 FROM conversation_metadata WHERE conversation_id = ? AND is_active = 1",
+                (cursor['conversation_id'],)
+            ).fetchone()
+            if conv:
+                return cursor['conversation_id']
+        
+        # If no active conversation, find most recent
+        recent = self.db.execute("""
+            SELECT cm.conversation_id
+            FROM conversation_metadata cm
+            JOIN conversation_participants cp ON cm.conversation_id = cp.conversation_id
+            WHERE cp.user_id = ? AND cm.is_active = 1
+            ORDER BY cm.last_activity DESC
+            LIMIT 1
+        """, (user_id,)).fetchone()
+        
+        if recent:
+            return recent['conversation_id']
+        
+        return None
+    
+    def set_active_conversation(self, user_id: str, conversation_id: str, 
+                                 channel_id: str = None):
+        """Set the active conversation for a user."""
+        if channel_id is None:
+            # Get channel from conversation metadata
+            conv = self.db.execute(
+                "SELECT channel_id FROM conversation_metadata WHERE conversation_id = ?",
+                (conversation_id,)
+            ).fetchone()
+            if conv:
+                channel_id = conv['channel_id']
+            else:
+                channel_id = "unknown"
+        
+        timestamp = time.time()
+        
+        self.db.execute("""
+            INSERT OR REPLACE INTO user_active_conversations
+            (user_id, conversation_id, channel_id, last_activity)
+            VALUES (?, ?, ?, ?)
+        """, (user_id, conversation_id, channel_id, timestamp))
+        
+        # Also update the conversation activity
+        self.update_conversation_activity(conversation_id)
+        
+        # Ensure user is a participant
+        self._ensure_participant(conversation_id, user_id)
+        
+        self.db.commit()
+        logger.info(f"Set active conversation {conversation_id} for user {user_id}")
+    
+    def update_conversation_activity(self, conversation_id: str):
+        """Update the last activity timestamp for a conversation."""
+        self.db.execute(
+            "UPDATE conversation_metadata SET last_activity = ? WHERE conversation_id = ?",
+            (time.time(), conversation_id)
+        )
+        self.db.commit()
+    
+    def add_conversation_participant(self, conversation_id: str, user_id: str,
+                                     notification_pref: str = 'all'):
+        """Add a user to an existing conversation (for group chats)."""
+        existing = self.db.execute(
+            "SELECT 1 FROM conversation_participants WHERE conversation_id = ? AND user_id = ?",
+            (conversation_id, user_id)
+        ).fetchone()
+        
+        if existing:
+            # Just update notification preference
+            self.db.execute("""
+                UPDATE conversation_participants 
+                SET notification_preference = ?
+                WHERE conversation_id = ? AND user_id = ?
+            """, (notification_pref, conversation_id, user_id))
+        else:
+            self.db.execute("""
+                INSERT INTO conversation_participants
+                (conversation_id, user_id, joined_at, is_active, notification_preference)
+                VALUES (?, ?, ?, 1, ?)
+            """, (conversation_id, user_id, time.time(), notification_pref))
+            
+            # Mark as group conversation
+            self.db.execute(
+                "UPDATE conversation_metadata SET is_group_conversation = 1 WHERE conversation_id = ?",
+                (conversation_id,)
+            )
+        
+        self.db.commit()
+        logger.info(f"Added user {user_id} to conversation {conversation_id}")
+    
+    def get_conversation_participants(self, conversation_id: str) -> List[Dict]:
+        """Get all participants in a conversation."""
+        cursor = self.db.execute("""
+            SELECT user_id, joined_at, last_read_timestamp, 
+                   is_active, notification_preference
+            FROM conversation_participants
+            WHERE conversation_id = ?
+            ORDER BY joined_at
+        """, (conversation_id,))
+        
+        return [{
+            'user_id': row['user_id'],
+            'joined_at': row['joined_at'],
+            'last_read': row['last_read_timestamp'],
+            'is_active': bool(row['is_active']),
+            'notification_pref': row['notification_preference']
+        } for row in cursor]
+    
+    def rename_conversation(self, conversation_id: str, new_title: str):
+        """Rename a conversation."""
+        self.db.execute(
+            "UPDATE conversation_metadata SET title = ? WHERE conversation_id = ?",
+            (new_title, conversation_id)
+        )
+        self.db.commit()
+    
+    def archive_conversation(self, conversation_id: str):
+        """Archive (soft-delete) a conversation."""
+        self.db.execute(
+            "UPDATE conversation_metadata SET is_active = 0 WHERE conversation_id = ?",
+            (conversation_id,)
+        )
+        self.db.execute(
+            "UPDATE conversation_participants SET is_active = 0 WHERE conversation_id = ?",
+            (conversation_id,)
+        )
+        self.db.commit()
+        logger.info(f"Archived conversation {conversation_id}")
+    
+    def update_message_count(self, conversation_id: str):
+        """Update the message count for a conversation."""
+        self.db.execute("""
+            UPDATE conversation_metadata 
+            SET message_count = (SELECT COUNT(*) FROM conversations WHERE conversation_id = ?)
+            WHERE conversation_id = ?
+        """, (conversation_id, conversation_id))
+        self.db.commit()
+    
     def get_stats(self) -> Dict[str, Any]:
         """Get memory statistics."""
         stats = {}
@@ -766,6 +1097,16 @@ class ConversationMemory:
         # Summaries
         cursor = self.db.execute("SELECT COUNT(*) FROM conversation_summaries")
         stats['summaries'] = cursor.fetchone()[0]
+        
+        # Conversation metadata stats
+        cursor = self.db.execute("SELECT COUNT(*) FROM conversation_metadata WHERE is_active = 1")
+        stats['active_named_conversations'] = cursor.fetchone()[0]
+        
+        cursor = self.db.execute("SELECT COUNT(*) FROM conversation_participants WHERE is_active = 1")
+        stats['active_participants'] = cursor.fetchone()[0]
+        
+        cursor = self.db.execute("SELECT COUNT(DISTINCT user_id) FROM conversation_participants WHERE is_active = 1")
+        stats['users_in_conversations'] = cursor.fetchone()[0]
         
         return stats
     
