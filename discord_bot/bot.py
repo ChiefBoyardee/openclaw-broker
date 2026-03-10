@@ -1184,8 +1184,21 @@ async def handle_agentic_command(message: discord.Message, prompt: str):
         session.on_tool_call(on_tool_call)
         session.on_complete(on_complete)
 
-        # Send initial status message
-        status_msg = await message.reply("🔄 Starting agentic mode... (this may take a moment)")
+        # Send initial acknowledgment - more natural than generic "agentic mode" text
+        # The LLM will stream its actual response through the on_message callback
+        intent_hint = ""
+        if _has_url(prompt):
+            intent_hint = "🔍 Looking up that information for you..."
+        elif "search" in prompt.lower() or "find" in prompt.lower():
+            intent_hint = "🔍 Searching for that..."
+        elif "repo" in prompt.lower() or "file" in prompt.lower() or "code" in prompt.lower():
+            intent_hint = "📁 Checking your repositories..."
+        elif "github" in prompt.lower():
+            intent_hint = "🐙 Checking GitHub..."
+        else:
+            intent_hint = "🤔 Working on that for you..."
+
+        status_msg = await message.reply(intent_hint)
 
         # Show typing indicator while processing
         async with message.channel.typing():

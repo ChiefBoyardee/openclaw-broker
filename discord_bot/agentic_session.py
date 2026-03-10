@@ -199,9 +199,9 @@ class AgenticSession:
 
         try:
             # Initial delay to allow runner to claim the job before we start polling
-            # This prevents "Job not found" errors due to race condition with WAL mode
-            initial_delay = 1.0  # 1 second delay to let runner claim and start processing
-            logger.debug(f"Waiting {initial_delay}s before starting chunk polling for job {self.job_id}")
+            # Runner polls every 10s, so we need to wait at least 10-12s for it to claim
+            initial_delay = 12.0  # 12 second delay for runner to claim and start processing
+            logger.info(f"Waiting {initial_delay}s for runner to claim job {self.job_id} before polling...")
             await asyncio.sleep(initial_delay)
 
             if self.config.use_sse:
