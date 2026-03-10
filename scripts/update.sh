@@ -8,7 +8,8 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 echo "=== Pulling latest changes from git ==="
-git pull origin main
+git fetch origin main
+git reset --hard origin/main
 
 HAS_SUDO=0
 if command -v sudo >/dev/null 2>&1; then
