@@ -83,6 +83,18 @@ for BOT_DIR in /opt/openclaw-bot-*; do
         run_sudo rm -rf "$BOT_DIR/discord_bot"
         run_sudo cp -r "${REPO_ROOT}/discord_bot" "$BOT_DIR/"
         run_sudo cp "${REPO_ROOT}/requirements.txt" "$BOT_DIR/"
+        
+        # Copy custom_personas.json if it doesn't exist (preserve user customizations)
+        if [[ -f "${REPO_ROOT}/custom_personas.json" ]]; then
+            if [[ ! -f "$BOT_DIR/custom_personas.json" ]]; then
+                echo "  -> Installing custom_personas.json (user customizations)..."
+                run_sudo cp "${REPO_ROOT}/custom_personas.json" "$BOT_DIR/"
+                run_sudo chown openclaw:openclaw "$BOT_DIR/custom_personas.json"
+            else
+                echo "  -> Preserving existing custom_personas.json (user customizations kept)"
+            fi
+        fi
+        
         run_sudo chown -R openclaw:openclaw "$BOT_DIR/discord_bot" "$BOT_DIR/requirements.txt"
         
         echo "  -> Updating bot dependencies..."
