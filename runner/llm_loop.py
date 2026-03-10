@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
-from runner.llm_client import chat_with_tools
+from runner.llm_client import chat_with_tools, _strip_think_blocks
 from runner.tool_registry import dispatch, get_tools_schema, parse_tool_args
 
 # Default truncate tool output for audit (bytes) — overridden by config
@@ -233,6 +233,8 @@ def run_llm_tool_loop(
     if final_text is None:
         final_text = "Max tool steps reached without final answer."
         safety["max_steps_reached"] = True
+    # Strip any residual <think> blocks
+    final_text = _strip_think_blocks(final_text)
     return {
         "final": final_text,
         "tool_calls": tool_calls_audit,
@@ -498,8 +500,9 @@ def run_llm_tool_loop_streaming(
         final_text = "Max tool steps reached without final answer."
         safety["max_steps_reached"] = True
 
-    # Post final chunk
+    # Post final chunk (strip any residual <think> blocks)
     if stream_client:
+        final_text = _strip_think_blocks(final_text)
         stream_client.post_final(final_text)
 
     return {
