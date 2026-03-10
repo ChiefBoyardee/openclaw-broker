@@ -1178,6 +1178,7 @@ async def handle_agentic_command(message: discord.Message, prompt: str):
 
         async def on_complete(final: str):
             logger.info(f"Agentic session complete, final length: {len(final)}")
+            await reply_in_chunks(message, final)
 
         session.on_message(on_message)
         session.on_thinking(on_thinking)
