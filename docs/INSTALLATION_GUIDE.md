@@ -15,7 +15,9 @@ This guide walks you through setting up OpenClaw from scratch. Whether you want 
 7. [Phase 4: Add the Runner (Worker)](#phase-4-add-the-runner-worker)
 8. [Phase 5: Optional — Repos, LLM, Multi-Worker](#phase-5-optional--repos-llm-multi-worker)
 9. [Updating After Code Changes](#updating-after-code-changes)
-10. [Troubleshooting](#troubleshooting)
+10. [Removing and Reinstalling the Discord Bot (Fresh Install)](#removing-and-reinstalling-the-discord-bot-fresh-install)
+11. [Overwrite and single-service behavior](#overwrite-and-single-service-behavior)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -446,6 +448,98 @@ After `git pull`, run the appropriate path for the topology you are actually usi
 | WSL runner | `bash deploy/scripts/update_runner_wsl.sh` then restart the runner process |
 
 See [docs/DEPLOY_AND_UPDATE.md](DEPLOY_AND_UPDATE.md) for details.
+
+---
+
+## Removing and Reinstalling the Discord Bot (Fresh Install)
+
+If you already have a Discord bot installed on the VPS and want to remove it so you can install the latest version from scratch, use the steps below.
+
+### 1. Find existing bot installations
+
+**Systemd units (instance-based, current design):**
+
+```bash
+# List all OpenClaw Discord bot units (running or not)
+systemctl list-units 'openclaw-discord-bot*' --all
+
+# Or list unit files (shows template and any instantiated instances)
+systemctl list-unit-files 'openclaw-discord-bot*'
+```
+
+Each instance appears as `openclaw-discord-bot@<instance_name>` (e.g. `openclaw-discord-bot@mybot`).
+
+**Install directories:**
+
+- **Per-instance (current):** `/opt/openclaw-bot-<instance_name>/` (code, venv, `bot.env`) and `/var/lib/openclaw-bot-<instance_name>/` (state, e.g. memory DB).
+- **Legacy single-instance:** If you used an older `install_discord_bot.sh` flow, you may have `/opt/openclaw-discord-bot/` and a non-template unit `openclaw-discord-bot.service` (no `@`).
+
+Check for existing dirs:
+
+```bash
+ls -la /opt/openclaw-bot-*
+ls -la /var/lib/openclaw-bot-*
+# Legacy single-instance:
+ls -la /opt/openclaw-discord-bot 2>/dev/null || true
+```
+
+The **repo** (source code used for install/updates) is usually at `/opt/openclaw/openclaw-broker`. You do not need to remove it to do a “fresh bot install”; the install scripts overwrite each bot instance’s copy of the code.
+
+### 2. Remove a specific bot instance
+
+Replace `<instance_name>` with the name you used (e.g. `mybot`, `urgoclaw`).
+
+```bash
+INSTANCE=mybot   # your instance name
+
+# Stop and disable the service
+sudo systemctl stop "openclaw-discord-bot@${INSTANCE}"
+sudo systemctl disable "openclaw-discord-bot@${INSTANCE}"
+
+# Remove instance directories (code, venv, env, state)
+sudo rm -rf "/opt/openclaw-bot-${INSTANCE}"
+sudo rm -rf "/var/lib/openclaw-bot-${INSTANCE}"
+```
+
+If you remove **all** bot instances and want to remove the shared systemd template as well:
+
+```bash
+sudo rm -f /etc/systemd/system/openclaw-discord-bot@.service
+sudo systemctl daemon-reload
+```
+
+### 3. Remove a legacy single-instance install
+
+If you have the older setup (unit `openclaw-discord-bot.service`, no `@`):
+
+```bash
+sudo systemctl stop openclaw-discord-bot
+sudo systemctl disable openclaw-discord-bot
+sudo rm -f /etc/systemd/system/openclaw-discord-bot.service
+sudo systemctl daemon-reload
+sudo rm -rf /opt/openclaw-discord-bot   # if it exists
+```
+
+### 4. Fresh install after removal
+
+From the repo on the VPS (e.g. `/opt/openclaw/openclaw-broker`):
+
+```bash
+cd /opt/openclaw/openclaw-broker
+git pull
+./deploy/onboard_bot.sh mybot
+```
+
+Use a new instance name or the same one you removed; when the instance dir is gone, the script creates it from scratch. When asked, enable and start the bot, then confirm with `whoami` in Discord.
+
+---
+
+## Overwrite and single-service behavior
+
+- **Reusing the same instance name:** If you run `./deploy/onboard_bot.sh mybot` and `/opt/openclaw-bot-mybot/` already exists, the install script **overwrites** that instance: it replaces the bot code and venv and rewrites `bot.env`. There is only one systemd unit per instance name (`openclaw-discord-bot@mybot`), so only one service runs for that name. After re-onboarding, enable/start (or restart) the unit so it runs the new code:  
+  `sudo systemctl enable --now openclaw-discord-bot@mybot` (or restart if already enabled).
+- **Ports:** The Discord bot does **not** listen on a port; it connects out to Discord and to the broker. Uniqueness is by **instance name** (systemd unit), not by port. Multiple bot instances (different names) can run on the same host; each has its own `DISCORD_TOKEN` and unit (e.g. `openclaw-discord-bot@mybot`, `openclaw-discord-bot@urgoclaw`).
+- **Broker:** The broker is a separate service and binds to a port (e.g. 8000). Only one broker process should use that port; the bot does not conflict with it.
 
 ---
 

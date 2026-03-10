@@ -14,7 +14,7 @@ Group=openclaw
 Environment=INSTANCE_NAME=%i
 EnvironmentFile=/opt/openclaw-bot-%i/bot.env
 WorkingDirectory=/opt/openclaw-bot-%i
-ExecStart=/opt/openclaw-bot-%i/venv/bin/python discord_bot/bot.py
+ExecStart=/opt/openclaw-bot-%i/venv/bin/python -m discord_bot.bot
 Restart=always
 RestartSec=2
 
