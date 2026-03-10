@@ -210,6 +210,18 @@ def require_bot_token(
         raise HTTPException(401, "bad bot token")
 
 
+def require_any_token(
+    x_bot_token: Optional[str] = Header(default=None, alias="X-Bot-Token"),
+    x_worker_token: Optional[str] = Header(default=None, alias="X-Worker-Token"),
+) -> None:
+    """Accept either bot token or worker token for job visibility endpoints."""
+    if x_bot_token and x_bot_token == BOT_TOKEN:
+        return
+    if x_worker_token and x_worker_token == WORKER_TOKEN:
+        return
+    raise HTTPException(401, "bad token")
+
+
 # ----------------------------
 # Capability matching (Sprint 5) — see broker.caps
 # ----------------------------
@@ -445,7 +457,7 @@ def next_job(
     return {"job": row_to_job_dict(row)}
 
 
-@app.get("/jobs/{job_id}", dependencies=[Depends(require_bot_token)])
+@app.get("/jobs/{job_id}", dependencies=[Depends(require_any_token)])
 def get_job(job_id: str):
     with db_conn() as conn:
         row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
