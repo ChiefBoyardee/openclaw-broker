@@ -206,19 +206,20 @@ class BrokerStreamingClient:
                                     return
 
                         elif response.status == 404:
-                            # Job might not be visible yet due to WAL mode - retry with exponential backoff
-                            # Increased from 3 to 5 attempts with longer delays for runner to claim job
-                            max_not_found_attempts = 5
-                            if not_found_attempts < max_not_found_attempts:
-                                not_found_attempts += 1
-                                # Exponential backoff: 200ms, 400ms, 800ms, 1600ms, 3200ms
+                            # Job might not be visible yet - runner hasn't claimed it or WAL mode delay
+                            # Instead of giving up, keep polling at normal intervals - runner may claim it later
+                            not_found_attempts += 1
+                            if not_found_attempts <= 5:
+                                # Exponential backoff for first 5 attempts: 200ms, 400ms, 800ms, 1600ms, 3200ms
                                 delay = 0.2 * (2 ** (not_found_attempts - 1))
-                                logger.warning(f"Job {job_id} not found (attempt {not_found_attempts}/{max_not_found_attempts}), retrying in {delay:.1f}s...")
+                                logger.warning(f"Job {job_id} not found (attempt {not_found_attempts}), retrying in {delay:.1f}s...")
                                 await asyncio.sleep(delay)
                                 continue  # Try again immediately
                             else:
-                                logger.error(f"Job {job_id} not found after {max_not_found_attempts} attempts - runner may not have claimed it yet")
-                                return
+                                # After 5 attempts, just log at debug level and continue normal polling
+                                # The runner may be busy with previous LLM work - keep waiting
+                                logger.debug(f"Job {job_id} not visible yet, continuing to poll...")
+                                # Fall through to normal sleep at end of loop
 
                 # Check timeout
                 elapsed = asyncio.get_event_loop().time() - start_time
