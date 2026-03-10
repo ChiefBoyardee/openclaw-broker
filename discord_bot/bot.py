@@ -871,8 +871,30 @@ async def _handle_natural_memory_command(message: discord.Message, intent_result
     # Determine subcommand based on message content
     text_lower = text.lower()
     
+    # Detect RECALL questions: "do you remember X?", "can you remember X?", "what's my X?"
+    # These should go to the LLM (which has memory context), NOT store a fact
+    recall_patterns = [
+        "do you remember", "can you remember", "do you recall",
+        "what's my", "what is my", "what are my",
+        "do you know my", "tell me my", "what do you remember",
+    ]
+    is_recall_question = any(p in text_lower for p in recall_patterns) or (
+        "remember" in text_lower and text.rstrip().endswith("?")
+    )
+    
+    if is_recall_question:
+        # Route to LLM chat — it has memory facts in its system prompt
+        logger.info(f"Memory recall question detected, routing to chat: {text[:80]}...")
+        async with message.channel.typing():
+            response = await handle_chat_command(
+                bot_instance(), message, text,
+                intent_result=intent_result
+            )
+        await reply_in_chunks(message, response)
+        return
+    
     if "remember" in text_lower and entities.get("fact_content"):
-        # Handle remember command
+        # Handle remember command (imperative: "remember that X")
         response = await handle_remember_command(
             bot_instance(), message, entities["fact_content"]
         )
@@ -910,11 +932,13 @@ async def _handle_natural_memory_command(message: discord.Message, intent_result
         await message.reply(response)
         
     else:
-        # Default to showing memory status
-        response = await handle_memory_command(
-            bot_instance(), message, "status"
-        )
-        await message.reply(response)
+        # Default: route to LLM chat (safer than showing raw memory status)
+        async with message.channel.typing():
+            response = await handle_chat_command(
+                bot_instance(), message, text,
+                intent_result=intent_result
+            )
+        await reply_in_chunks(message, response)
 
 
 async def _handle_natural_conversations_command(message: discord.Message, intent_result, text: str):
