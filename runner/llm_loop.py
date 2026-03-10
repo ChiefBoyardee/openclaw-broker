@@ -3,6 +3,8 @@ LLM tool loop for llm_task command (Sprint 5). Calls LLM with tools, dispatches 
 """
 from __future__ import annotations
 
+import json
+import re
 import sys
 import logging
 from typing import Any, Optional
@@ -17,6 +19,50 @@ TOOL_OUTPUT_MAX_BYTES = 8000
 
 # Consecutive refusals before short-circuit (Sprint 3)
 POLICY_REFUSAL_THRESHOLD = 3
+
+# URL pattern for pre-fetch detection
+_URL_RE = re.compile(r'https?://[^\s<>"\)]+', re.IGNORECASE)
+
+
+def _prefetch_urls(prompt: str, runner_bridge) -> Optional[str]:
+    """
+    If the prompt contains URLs, pre-fetch their content with Playwright.
+    Returns augmented prompt text with page content, or None if no URLs found.
+    """
+    urls = _URL_RE.findall(prompt)
+    if not urls:
+        return None
+
+    fetched_content = []
+    for url in urls[:2]:  # Limit to first 2 URLs
+        try:
+            result_json = runner_bridge.browser_navigate(url, wait_for_load=True)
+            result = json.loads(result_json)
+            if result.get("success") and result.get("content"):
+                title = result.get("title", "")
+                content = result.get("content", "")
+                fetched_content.append(
+                    f"--- Content from {url} ---\n"
+                    f"Title: {title}\n\n"
+                    f"{content}\n"
+                    f"--- End of page content ---"
+                )
+                logger.info(f"Pre-fetched URL: {url} ({len(content)} chars)")
+            else:
+                logger.warning(f"Pre-fetch failed for {url}: {result.get('error', 'unknown')}")
+        except Exception as e:
+            logger.warning(f"Pre-fetch error for {url}: {e}")
+
+    if not fetched_content:
+        return None
+
+    pages_text = "\n\n".join(fetched_content)
+    return (
+        f"{prompt}\n\n"
+        f"I've already fetched the page content for you. Here it is:\n\n"
+        f"{pages_text}\n\n"
+        f"Based on this content, answer the user's question directly."
+    )
 
 
 def _truncate_for_audit(s: str, max_bytes: int = TOOL_OUTPUT_MAX_BYTES) -> tuple[str, bool]:
@@ -372,6 +418,41 @@ def run_llm_tool_loop_streaming(
     max_output_bytes = config.get("max_output_bytes") or TOOL_OUTPUT_MAX_BYTES
     max_tool_arg_bytes = config.get("max_tool_arg_bytes") or 4096
     consecutive_refusals = 0
+
+    # ── URL pre-fetch shortcircuit ──
+    # If the user message contains URLs, fetch content before calling the LLM.
+    # This bypasses the tool loop entirely, avoiding fragile tool_calls parsing.
+    enriched_prompt = _prefetch_urls(prompt, runner_bridge)
+    if enriched_prompt:
+        logger.info("URL pre-fetch: bypassing tool loop, making single LLM call with page content")
+        # Replace the user message with the enriched version
+        for i in range(len(messages) - 1, -1, -1):
+            if messages[i].get("role") == "user":
+                messages[i]["content"] = enriched_prompt
+                break
+
+        if stream_client:
+            stream_client.post_heartbeat()
+
+        response = chat_with_tools(
+            messages,
+            [],  # No tools — force plain text response
+            base_url=config.get("base_url", ""),
+            api_key=config.get("api_key", ""),
+            model=config.get("model", ""),
+            temperature=config.get("temperature", 0.2),
+            max_tokens=config.get("max_tokens", 4096),
+        )
+        final_text = _strip_think_blocks(response.get("content") or "(no response)")
+        if stream_client:
+            stream_client.post_final(final_text)
+        return {
+            "final": final_text,
+            "tool_calls": [{"name": "url_prefetch", "args": {"urls": _URL_RE.findall(prompt)[:2]}, "status": "ok"}],
+            "model": model_used,
+            "worker_id": worker_id,
+            "safety": safety,
+        }
 
     while step < max_steps:
         step += 1
