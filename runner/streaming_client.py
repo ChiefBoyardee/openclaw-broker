@@ -53,6 +53,11 @@ class RunnerStreamClient:
         self.enabled = STREAMING_ENABLED and bool(worker_token)
         self.last_heartbeat = 0
         self.chunks_posted = 0
+        
+        if not self.enabled:
+            logger.warning(f"Streaming client disabled for job {job_id}: STREAMING_ENABLED={STREAMING_ENABLED}, has_token={bool(worker_token)}")
+        else:
+            logger.info(f"Streaming client initialized for job {job_id}")
 
     def _headers(self) -> Dict[str, str]:
         """Return authentication headers."""
@@ -95,7 +100,10 @@ class RunnerStreamClient:
 
             if response.status_code == 200:
                 self.chunks_posted += 1
-                logger.debug(f"Posted chunk {chunk_type} for job {self.job_id}")
+                if self.chunks_posted == 1:
+                    logger.info(f"First chunk posted for job {self.job_id}: {chunk_type}")
+                else:
+                    logger.debug(f"Posted chunk {chunk_type} for job {self.job_id}")
                 return True
             elif response.status_code == 404:
                 logger.warning(f"Job {self.job_id} not found when posting chunk")
