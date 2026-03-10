@@ -171,6 +171,7 @@ class BrokerStreamingClient:
 
         not_found_attempts = 0
         while True:
+            chunks = []  # Initialize chunks for this iteration
             try:
                 params: Dict[str, Any] = {"after_id": last_id, "limit": 50}
                 if chunk_type:
