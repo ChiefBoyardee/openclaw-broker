@@ -697,7 +697,15 @@ class ChatManager:
         system_msgs = [m for m in context_messages if m.get("role") == "system"]
         if system_msgs:
             first_system = system_msgs[0].get("content", "")[:100]
+            full_system = system_msgs[0].get("content", "")
+            has_knowledge = "User information:" in full_system
             logger.info(f"Sending to LLM with persona {session.persona_key}, system prompt starts: {first_system}...")
+            logger.info(f"System prompt contains user knowledge: {has_knowledge} (length: {len(full_system)} chars)")
+            if has_knowledge:
+                # Extract and log the knowledge section
+                knowledge_start = full_system.find("User information:")
+                knowledge_section = full_system[knowledge_start:knowledge_start+200]
+                logger.info(f"Knowledge section: {knowledge_section}...")
         else:
             logger.warning(f"No system message in conversation! Persona: {session.persona_key}")
 

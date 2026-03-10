@@ -571,9 +571,12 @@ class ConversationMemory:
             """, [time.time()] + fact_ids)
             self.db.commit()
 
-        logger.debug(f"Retrieved {len(facts)} facts for user {user_id[:8]}... (type={fact_type}, min_conf={min_confidence})")
-        for fact in facts[:3]:  # Log first 3 for debugging
-            logger.debug(f"  Fact: {fact.fact_type} = {fact.content[:50]}...")
+        if facts:
+            logger.info(f"Retrieved {len(facts)} facts for user {user_id[:8]}...")
+            for fact in facts[:3]:
+                logger.info(f"  Fact #{fact.id}: {fact.fact_type} = {fact.content[:50]}...")
+        else:
+            logger.info(f"No facts found for user {user_id[:8]}... (type={fact_type}, min_conf={min_confidence})")
 
         return facts
     
