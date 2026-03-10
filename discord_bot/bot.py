@@ -132,6 +132,11 @@ def _strip_phrase_any_case(text: str, phrase: str) -> str:
     return (text[:idx] + text[idx + len(phrase) :]).strip()
 
 
+def _has_url(text: str) -> bool:
+    """Check if text contains a URL (http or https)."""
+    return bool(re.search(r'https?://[^\s]+', text))
+
+
 def _allowlist_display() -> str:
     """Summary string for whoami (allowlist status)."""
     if not ALLOWLIST_IDS:
@@ -773,8 +778,8 @@ async def on_message(message: discord.Message):
             
             # Only use simple chat for clear conversational intents with high confidence
             # Everything else gets the full agentic treatment with tool autonomy
-            if intent_result.intent == "casual_chat" and intent_result.confidence > 0.7:
-                # Clear conversational query - quick simple response
+            if intent_result.intent == "casual_chat" and intent_result.confidence > 0.7 and not _has_url(text):
+                # Clear conversational query - quick simple response (but not for URLs!)
                 logger.info(f"Simple chat for clear casual_chat (confidence: {intent_result.confidence:.2f})")
                 async with message.channel.typing():
                     response = await handle_chat_command(
