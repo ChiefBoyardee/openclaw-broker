@@ -559,9 +559,10 @@ class ChatManager:
                 if status == "failed":
                     err = job.get("error") or job.get("result") or "unknown"
                     return f"[Error: {err}]"
-                
-                time.sleep(sleep_sec)
-                sleep_sec = min(sleep_sec * 2, 2.0)
+
+                # Short sleep to avoid blocking Discord event loop
+                await asyncio.sleep(sleep_sec)
+                sleep_sec = min(sleep_sec * 2, 1.0)  # Cap at 1s
             
             return f"[Still processing... Check status with: status {job_id}]"
             

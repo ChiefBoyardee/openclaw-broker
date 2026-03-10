@@ -660,7 +660,7 @@ class ConversationMemory:
         # Return defaults
         return {
             'user_id': user_id,
-            'preferred_persona': 'default',
+            'preferred_persona': None,  # None means use system default
             'conversation_style': 'balanced',
             'max_history_messages': 50,
             'memory_enabled': True,
@@ -695,11 +695,11 @@ class ConversationMemory:
             # Insert
             self.db.execute("""
                 INSERT INTO user_settings
-                (user_id, preferred_persona, conversation_style, 
+                (user_id, preferred_persona, conversation_style,
                  max_history_messages, memory_enabled, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (user_id, 
-                  kwargs.get('preferred_persona', 'default'),
+            """, (user_id,
+                  kwargs.get('preferred_persona', None),
                   kwargs.get('conversation_style', 'balanced'),
                   kwargs.get('max_history_messages', 50),
                   int(kwargs.get('memory_enabled', True)),
