@@ -905,8 +905,13 @@ def _init_conversation_features():
             threading.Thread(target=run_health_check, daemon=True).start()
         
         # Initialize memory and personality (used by chat_commands when handling chat)
-        get_memory(MEMORY_DB_PATH, embedding_provider)
-        get_self_memory(SELF_MEMORY_DB_PATH, embedding_provider)
+        # Convert to absolute path to ensure consistent database location in WSL
+        memory_db_absolute = os.path.abspath(MEMORY_DB_PATH)
+        self_memory_db_absolute = os.path.abspath(SELF_MEMORY_DB_PATH)
+        logger.info(f"Using memory database at: {memory_db_absolute}")
+        logger.info(f"Using self-memory database at: {self_memory_db_absolute}")
+        get_memory(memory_db_absolute, embedding_provider)
+        get_self_memory(self_memory_db_absolute, embedding_provider)
         engine = get_personality_engine(DEFAULT_PERSONA)
 
         # Load custom personas from user config (lives alongside bot.env, survives updates)

@@ -411,8 +411,10 @@ class ChatManager:
                 break
         
         # Limit to first 2 facts to avoid over-extracting
+        if facts:
+            logger.debug(f"Extracted {len(facts)} obvious facts from message: {facts}")
         return facts[:2]
-            
+
     async def _process_memory_background(self, user_id: str, conversation_id: str):
         """Asynchronously process conversation history to extract, update, or remove facts using LLM."""
         try:
@@ -571,7 +573,12 @@ class ChatManager:
             for fact in context['user_knowledge']:
                 knowledge_text += f"- {fact.fact_type}: {fact.content}\n"
             system_prompt += f"\n\n{knowledge_text}"
-        
+            logger.info(f"Added {len(context['user_knowledge'])} facts to system prompt for user {user_id[:8]}...")
+            for fact in context['user_knowledge'][:3]:
+                logger.debug(f"  Knowledge: {fact.fact_type} = {fact.content[:50]}...")
+        else:
+            logger.debug(f"No user knowledge found for user {user_id[:8]}...")
+
         messages.append({"role": "system", "content": system_prompt})
         
         # Add conversation summary if available
@@ -610,12 +617,15 @@ class ChatManager:
         # Extract and store obvious facts immediately (don't wait for background)
         immediate_facts = self._extract_obvious_facts(message_content)
         if immediate_facts:
+            logger.info(f"Extracted {len(immediate_facts)} immediate facts from message for user {user_id[:8]}...")
             for fact_type, content in immediate_facts:
                 try:
                     self.memory.add_user_fact(user_id, fact_type, content, confidence=0.9)
-                    logger.info(f"Immediate memory: Stored {fact_type}='{content}' for user {user_id}")
+                    logger.info(f"Immediate memory: Stored {fact_type}='{content}' for user {user_id[:8]}...")
                 except Exception as e:
-                    logger.debug(f"Failed to store immediate fact: {e}")
+                    logger.warning(f"Failed to store immediate fact: {e}")
+        else:
+            logger.debug(f"No obvious facts extracted from message for user {user_id[:8]}...")
         
         # Get voice settings
         voice_settings = self.personality.get_voice_settings(persona, user_id)

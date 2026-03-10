@@ -348,15 +348,18 @@ class ConversationMemory:
             """, (message_id, embedding))
         
         self.db.commit()
-        
+
+        # Update message count in conversation metadata
+        self.update_message_count(conversation_id)
+
         # Check if we should create summary or extract knowledge
         self._maybe_create_summary(conversation_id)
         self._maybe_extract_knowledge(user_id, conversation_id)
-        
+
         return message_id
-    
-    async def add_message_async(self, conversation_id: str, user_id: str, 
-                                 role: str, content: str, 
+
+    async def add_message_async(self, conversation_id: str, user_id: str,
+                                 role: str, content: str,
                                  metadata: Optional[Dict] = None) -> int:
         """
         Add a message to conversation history (async version - non-blocking).
@@ -391,15 +394,18 @@ class ConversationMemory:
             """, (message_id, embedding))
         
         self.db.commit()
-        
+
+        # Update message count in conversation metadata (run in thread pool to avoid blocking)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self.update_message_count, conversation_id)
+
         # Check if we should create summary or extract knowledge
         # Run these in thread pool to avoid blocking
-        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._maybe_create_summary, conversation_id)
         await loop.run_in_executor(None, self._maybe_extract_knowledge, user_id, conversation_id)
-        
+
         return message_id
-    
+
     def _calculate_importance(self, content: str, role: str) -> float:
         """Calculate importance score for a message."""
         base_score = 1.0
@@ -521,7 +527,7 @@ class ConversationMemory:
         scored_messages.sort(key=lambda x: x[1], reverse=True)
         return scored_messages[:k]
     
-    def get_user_knowledge(self, user_id: str, 
+    def get_user_knowledge(self, user_id: str,
                            fact_type: Optional[str] = None,
                            min_confidence: float = 0.5,
                            limit: int = 10) -> List[UserFact]:
@@ -531,16 +537,16 @@ class ConversationMemory:
             WHERE user_id = ? AND confidence >= ?
         """
         params = [user_id, min_confidence]
-        
+
         if fact_type:
             query += " AND fact_type = ?"
             params.append(fact_type)
-        
+
         query += " ORDER BY confidence DESC, access_count DESC LIMIT ?"
         params.append(limit)
-        
+
         cursor = self.db.execute(query, params)
-        
+
         facts = []
         for row in cursor.fetchall():
             facts.append(UserFact(
@@ -552,7 +558,7 @@ class ConversationMemory:
                 timestamp=row['timestamp'],
                 access_count=row['access_count']
             ))
-        
+
         # Update access count
         if facts:
             fact_ids = [f.id for f in facts]
@@ -564,7 +570,11 @@ class ConversationMemory:
                 WHERE id IN ({placeholders})
             """, [time.time()] + fact_ids)
             self.db.commit()
-        
+
+        logger.debug(f"Retrieved {len(facts)} facts for user {user_id[:8]}... (type={fact_type}, min_conf={min_confidence})")
+        for fact in facts[:3]:  # Log first 3 for debugging
+            logger.debug(f"  Fact: {fact.fact_type} = {fact.content[:50]}...")
+
         return facts
     
     def add_user_fact(self, user_id: str, fact_type: str, content: str,
@@ -577,9 +587,9 @@ class ConversationMemory:
                 content LIKE ? OR ? LIKE '%' || content || '%'
             )
         """, (user_id, fact_type, f"%{content[:50]}%", content))
-        
+
         existing = cursor.fetchone()
-        
+
         if existing:
             # Update confidence if fact already exists
             new_confidence = min(existing['confidence'] + 0.1, 1.0)
@@ -588,6 +598,7 @@ class ConversationMemory:
                 SET confidence = ?, timestamp = ?, access_count = access_count + 1
                 WHERE id = ?
             """, (new_confidence, time.time(), existing['id']))
+            logger.debug(f"Updated fact confidence for user {user_id[:8]}...: {fact_type} = {content[:50]}...")
         else:
             # Insert new fact
             self.db.execute("""
@@ -596,7 +607,8 @@ class ConversationMemory:
                 VALUES (?, ?, ?, ?, ?, ?)
             """, (user_id, fact_type, content, confidence, time.time(),
                   json.dumps(source_message_ids) if source_message_ids else None))
-        
+            logger.info(f"Stored new fact for user {user_id[:8]}...: {fact_type} = {content[:50]}...")
+
         self.db.commit()
     
     def remove_user_facts(self, user_id: str, fact_ids: List[int]):
@@ -675,8 +687,15 @@ class ConversationMemory:
                     used_tokens += msg_tokens
         
         context['estimated_tokens'] = used_tokens
+
+        logger.debug(f"Built context for conv {conversation_id[:20]}...: "
+                    f"{len(context['recent_messages'])} recent msgs, "
+                    f"{len(context['user_knowledge'])} facts, "
+                    f"summary={'yes' if context['summary'] else 'no'}, "
+                    f"~{used_tokens} tokens")
+
         return context
-    
+
     def _maybe_create_summary(self, conversation_id: str):
         """Create a summary if message count threshold reached."""
         count = self.db.execute(
