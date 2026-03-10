@@ -383,6 +383,43 @@ def main():
             time.sleep(POLL_INTERVAL_SEC)
 
 
+# --- Embedding subsystem (runs on WSL, saves VPS CPU) ---
+# Model loaded once, reused across embed jobs
+_embedding_model = None
+_embedding_model_name = os.environ.get("EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-0.6B")
+
+def _get_embedding_model():
+    """Lazy-load the embedding model (sentence-transformers)."""
+    global _embedding_model
+    if _embedding_model is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+            logger.info(f"Loading embedding model: {_embedding_model_name}")
+            # Auto-detect CUDA or fall back to CPU
+            import torch
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            _embedding_model = SentenceTransformer(_embedding_model_name, device=device)
+            logger.info(f"Embedding model loaded on {device}")
+        except ImportError as e:
+            raise ImportError(f"sentence-transformers required for embeddings: {e}")
+    return _embedding_model
+
+def _embed_text(text: str) -> dict:
+    """Generate embeddings for text. Returns dict with embedding array and metadata."""
+    if not text:
+        raise ValueError("text is required for embedding")
+    model = _get_embedding_model()
+    # Truncate to safe limit
+    truncated = text[:10000]
+    embedding = model.encode(truncated, convert_to_numpy=True)
+    return {
+        "embedding": embedding.tolist(),
+        "dimension": len(embedding),
+        "model": _embedding_model_name,
+        "device": str(model.device),
+    }
+
+
 def run_job(command: str, payload: str) -> str:
     """Execute the job and return result string (plain or JSON string)."""
     if command == "ping":
@@ -399,6 +436,7 @@ def run_job(command: str, payload: str) -> str:
             "repo_last_commit",
             "repo_grep",
             "repo_readfile",
+            "embed",
         ]
         # Add browser capabilities if playwright is available
         try:
@@ -423,6 +461,15 @@ def run_job(command: str, payload: str) -> str:
             from runner.vps_website_tools import get_vps_website_capabilities
             vps_caps = get_vps_website_capabilities()
             for cap in vps_caps:
+                if cap not in caps:
+                    caps.append(cap)
+        except ImportError:
+            pass
+        # Add Nginx capabilities
+        try:
+            from runner.nginx_configurator import get_nginx_capabilities
+            nginx_caps = get_nginx_capabilities()
+            for cap in nginx_caps:
                 if cap not in caps:
                     caps.append(cap)
         except ImportError:
@@ -542,6 +589,12 @@ def run_job(command: str, payload: str) -> str:
             website_create_post, website_create_knowledge_page, website_update_about,
             website_get_stats, get_vps_website_capabilities
         )
+        # Import Nginx configurator
+        from runner.nginx_configurator import (
+            nginx_generate_config, nginx_install_config, nginx_enable_site,
+            nginx_disable_site, nginx_remove_config, nginx_test_config,
+            nginx_reload, nginx_get_status, get_nginx_capabilities
+        )
 
         class _Bridge:
             allowed_tools = allowed_set
@@ -613,9 +666,37 @@ def run_job(command: str, payload: str) -> str:
                 return website_update_about(biography, interests, current_goals)
             def website_get_stats(_self):
                 return website_get_stats()
+            # Nginx Management tools
+            def nginx_generate_config(_self, domain: str, web_root: str, ssl_cert: Optional[str] = None, ssl_key: Optional[str] = None, enable_http2: bool = True, rate_limit_zone: str = "ai_site", rate_limit_rps: int = 10, rate_limit_burst: int = 20):
+                return nginx_generate_config(domain, web_root, ssl_cert, ssl_key, enable_http2, rate_limit_zone, rate_limit_rps, rate_limit_burst)
+            def nginx_install_config(_self, domain: str, config_content: str, enable: bool = True):
+                return nginx_install_config(domain, config_content, enable)
+            def nginx_enable_site(_self, domain: str):
+                return nginx_enable_site(domain)
+            def nginx_disable_site(_self, domain: str):
+                return nginx_disable_site(domain)
+            def nginx_remove_config(_self, domain: str):
+                return nginx_remove_config(domain)
+            def nginx_test_config(_self):
+                return nginx_test_config()
+            def nginx_reload(_self):
+                return nginx_reload()
+            def nginx_get_status(_self):
+                return nginx_get_status()
         bridge = _Bridge()
         envelope = run_llm_tool_loop(prompt, tools_list, repo_context, max_steps, config, bridge, conversation_history)
         return json.dumps(envelope)
+
+    if command == "embed":
+        try:
+            obj = json.loads(payload) if payload else {}
+        except json.JSONDecodeError:
+            raise ValueError("embed payload must be valid JSON")
+        text = obj.get("text", "").strip()
+        if not text:
+            raise ValueError("text is required for embedding")
+        result = _embed_text(text)
+        return json.dumps(result)
 
     return f"unknown command: {command}"
 

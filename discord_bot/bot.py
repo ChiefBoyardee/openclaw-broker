@@ -29,6 +29,8 @@ try:
         handle_memory_command,
         handle_remember_command,
         handle_history_command,
+        handle_website_command,
+        handle_website_post_command,
     )
     from .memory import get_memory
     from .self_memory import get_self_memory
@@ -58,7 +60,7 @@ MEMORY_DB_PATH = os.environ.get("MEMORY_DB_PATH", "discord_bot_memory.db")
 SELF_MEMORY_DB_PATH = os.environ.get("SELF_MEMORY_DB_PATH", "urgo_self_memory.db")
 DEFAULT_PERSONA = os.environ.get("DEFAULT_PERSONA", "helpful_assistant")
 CUSTOM_PERSONAS_PATH = os.environ.get("CUSTOM_PERSONAS_PATH", "custom_personas.json")
-EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "none").lower()  # 'openai', 'local', 'none'
+EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "none").lower()  # 'openai', 'local', 'remote', 'none'
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 CONVERSATION_TIMEOUT_MINUTES = float(os.environ.get("CONVERSATION_TIMEOUT_MINUTES", "30"))
@@ -680,6 +682,22 @@ async def on_message(message: discord.Message):
                 response = await handle_history_command(bot_instance(), message, payload)
             await reply_in_chunks(message, response)
             return
+        
+        # Website management commands
+        if cmd == "website":
+            async with message.channel.typing():
+                response = await handle_website_command(bot_instance(), message, payload)
+            await reply_in_chunks(message, response)
+            return
+        
+        if cmd == "website_post":
+            # Permission check for post creation
+            if hasattr(message, 'guild') and message.guild:
+                return "📝 Post creation is only available in DMs to prevent spam."
+            async with message.channel.typing():
+                response = await handle_website_post_command(bot_instance(), message, payload)
+            await reply_in_chunks(message, response)
+            return
 
     # Explicit help command
     if cmd in ("help", "commands"):
@@ -703,6 +721,14 @@ async def on_message(message: discord.Message):
             "**LLM Commands:**",
             "`ask <prompt>` - Ask LLM (one-shot)",
             "`urgo <prompt>` - Urgent LLM request",
+            "",
+            "**Website Commands:**",
+            "`website init` - Initialize AI website",
+            "`website status` - Show website stats",
+            "`website regenerate` - Full site regeneration",
+            "`website sync` - Sync from memory",
+            "`website customize` - Show theme settings",
+            "`website nginx` - Nginx status",
         ]
 
         if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
@@ -795,7 +821,7 @@ def _init_conversation_features():
                 from sentence_transformers import SentenceTransformer
                 # trust_remote_code=True is required for Qwen and some other modern models
                 model = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True)
-                
+
                 import numpy as np
                 def local_embed(text: str):
                     try:
@@ -804,13 +830,43 @@ def _init_conversation_features():
                     except Exception as e:
                         logger.error(f"Local embedding failed: {e}")
                         return None
-                
+
                 embedding_provider = local_embed
                 logger.info(f"Local embeddings enabled ({EMBEDDING_MODEL})")
             except ImportError:
                 logger.warning("sentence-transformers not installed, local embeddings disabled")
                 logger.warning("Install with: pip install sentence-transformers")
-        
+
+        elif EMBEDDING_PROVIDER == "remote":
+            # Offload embeddings to WSL runner via broker jobs (saves VPS CPU)
+            try:
+                from discord_bot.embeddings import RemoteEmbeddingProvider
+
+                remote_provider = RemoteEmbeddingProvider(
+                    broker_url=BROKER_URL,
+                    bot_token=BOT_TOKEN,
+                    model=EMBEDDING_MODEL,
+                    timeout=30.0,
+                )
+
+                def remote_embed(text: str):
+                    try:
+                        # Use sync version since we're in a sync context
+                        result = remote_provider.embed_sync(text)
+                        if result is None:
+                            return None
+                        import numpy as np
+                        return np.array(result, dtype=np.float32)
+                    except Exception as e:
+                        logger.error(f"Remote embedding failed: {e}")
+                        return None
+
+                embedding_provider = remote_embed
+                logger.info(f"Remote embeddings enabled ({EMBEDDING_MODEL} via WSL runner)")
+            except ImportError as e:
+                logger.warning(f"Remote embeddings not available: {e}")
+                logger.warning("Ensure discord_bot.embeddings module is available")
+
         # Health check: Test embedding provider if configured (run in background)
         if embedding_provider:
             def run_health_check():
