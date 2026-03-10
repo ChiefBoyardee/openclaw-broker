@@ -780,10 +780,11 @@ def _init_conversation_features():
                 logger.warning("openai package not installed, embeddings disabled")
         
         elif EMBEDDING_PROVIDER == "local":
-            # Try to use sentence-transformers or similar
+            # Use sentence-transformers (or similar) with the specified model
             try:
                 from sentence_transformers import SentenceTransformer
-                model = SentenceTransformer('all-MiniLM-L6-v2')
+                # trust_remote_code=True is required for Qwen and some other modern models
+                model = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True)
                 
                 import numpy as np
                 def local_embed(text: str):
@@ -795,7 +796,7 @@ def _init_conversation_features():
                         return None
                 
                 embedding_provider = local_embed
-                logger.info("Local embeddings enabled (sentence-transformers)")
+                logger.info(f"Local embeddings enabled ({EMBEDDING_MODEL})")
             except ImportError:
                 logger.warning("sentence-transformers not installed, local embeddings disabled")
                 logger.warning("Install with: pip install sentence-transformers")
