@@ -16,10 +16,11 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from pydantic import BaseModel
 
+import logging
+
 DB_PATH = os.environ.get("BROKER_DB", "/var/lib/openclaw-broker/broker.db")
 
 logger = logging.getLogger(__name__)
-import logging
 
 
 # Chunk types for job streaming
