@@ -146,20 +146,26 @@ def run_llm_tool_loop(
         )
         content = response.get("content")
         tc_list = response.get("tool_calls")
+        fallback_parsed = response.get("fallback_parsed", False)
         if content and not tc_list:
             final_text = content
             break
         if not tc_list:
             final_text = content or "(no response)"
             break
-        # Append assistant message with tool_calls first (OpenAI format), then tool results
-        assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or None}
-        if tc_list:
+
+        # ── Execute tool calls ──
+        tool_results_text = []  # For fallback plain-text format
+
+        if not fallback_parsed:
+            # Native tool_calls: use OpenAI format
+            assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or None}
             assistant_msg["tool_calls"] = [
                 {"id": tc.get("id"), "type": "function", "function": {"name": tc.get("name"), "arguments": tc.get("arguments", "{}")}}
                 for tc in tc_list
             ]
-        messages.append(assistant_msg)
+            messages.append(assistant_msg)
+
         for tc in tc_list:
             name = tc.get("name", "")
             args_str = tc.get("arguments", "{}")
@@ -168,11 +174,10 @@ def run_llm_tool_loop(
                 err = "tool arguments too large"
                 consecutive_refusals += 1
                 tool_calls_audit.append({"name": name, "args": "<oversized>", "status": "error", "truncated_output": err})
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": f"Error: {err}",
-                })
+                if fallback_parsed:
+                    tool_results_text.append(f"[{name}]: Error: {err}")
+                else:
+                    messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": f"Error: {err}"})
                 if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
                     final_text = "Job stopped: policy limits exceeded."
                     safety["reason"] = "policy_refused"
@@ -184,11 +189,10 @@ def run_llm_tool_loop(
             except ValueError as e:
                 consecutive_refusals += 1
                 tool_calls_audit.append({"name": name, "args": args_str, "status": "error", "truncated_output": str(e)})
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": f"Error: {e}",
-                })
+                if fallback_parsed:
+                    tool_results_text.append(f"[{name}]: Error: {e}")
+                else:
+                    messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": f"Error: {e}"})
                 if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
                     final_text = "Job stopped: policy limits exceeded."
                     safety["reason"] = "policy_refused"
@@ -201,11 +205,10 @@ def run_llm_tool_loop(
                 consecutive_refusals += 1
                 err_msg = str(e) or "unknown"
                 tool_calls_audit.append({"name": name, "args": args, "status": "error", "truncated_output": err_msg})
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": f"Error: {err_msg}",
-                })
+                if fallback_parsed:
+                    tool_results_text.append(f"[{name}]: Error: {err_msg}")
+                else:
+                    messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": f"Error: {err_msg}"})
                 if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
                     final_text = "Job stopped: policy limits exceeded."
                     safety["reason"] = "policy_refused"
@@ -222,11 +225,24 @@ def run_llm_tool_loop(
                 "status": "ok",
                 "truncated_output": truncated_result,
             })
+            if fallback_parsed:
+                tool_results_text.append(f"[{name}]: {truncated_result}")
+            else:
+                messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": truncated_result})
+
+        # When fallback parser was used, inject results as plain-text user message
+        if fallback_parsed and tool_results_text:
+            results_block = "\n\n".join(tool_results_text)
+            messages.append({"role": "assistant", "content": content or "I'll look into that."})
             messages.append({
-                "role": "tool",
-                "tool_call_id": tc.get("id", ""),
-                "content": truncated_result,
+                "role": "user",
+                "content": (
+                    f"Here are the results from the tools you used:\n\n{results_block}\n\n"
+                    "Based on these results, provide your answer directly to the user. "
+                    "Do NOT call any more tools — just respond with your answer."
+                ),
             })
+
         if final_text is not None and safety.get("reason") == "policy_refused":
             break
 
@@ -375,6 +391,7 @@ def run_llm_tool_loop_streaming(
 
         content = response.get("content")
         tc_list = response.get("tool_calls")
+        fallback_parsed = response.get("fallback_parsed", False)
 
         if content and not tc_list:
             # Final answer received
@@ -385,14 +402,18 @@ def run_llm_tool_loop_streaming(
             final_text = content or "(no response)"
             break
 
-        # Process tool calls
-        assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or None}
-        if tc_list:
+        # ── Execute all tool calls and collect results ──
+        tool_results_text = []  # For fallback plain-text format
+
+        # Add assistant message to history
+        if not fallback_parsed:
+            # Native tool_calls: use OpenAI format
+            assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or None}
             assistant_msg["tool_calls"] = [
                 {"id": tc.get("id"), "type": "function", "function": {"name": tc.get("name"), "arguments": tc.get("arguments", "{}")}}
                 for tc in tc_list
             ]
-        messages.append(assistant_msg)
+            messages.append(assistant_msg)
 
         for tc in tc_list:
             name = tc.get("name", "")
@@ -409,13 +430,15 @@ def run_llm_tool_loop_streaming(
                     msg_type = args.get("type", "info")
                     if message:
                         stream_client.post_message(message, msg_type)
-                    # Add successful tool result
                     tool_result = json.dumps({"sent": True, "message": message})
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
-                        "content": tool_result,
-                    })
+                    if fallback_parsed:
+                        tool_results_text.append(f"[{name}]: {tool_result}")
+                    else:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", ""),
+                            "content": tool_result,
+                        })
                     tool_calls_audit.append({
                         "name": name,
                         "args": args,
@@ -431,11 +454,14 @@ def run_llm_tool_loop_streaming(
                 err = "tool arguments too large"
                 consecutive_refusals += 1
                 tool_calls_audit.append({"name": name, "args": "<oversized>", "status": "error", "truncated_output": err})
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": f"Error: {err}",
-                })
+                if fallback_parsed:
+                    tool_results_text.append(f"[{name}]: Error: {err}")
+                else:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "content": f"Error: {err}",
+                    })
                 if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
                     final_text = "Job stopped: policy limits exceeded."
                     safety["reason"] = "policy_refused"
@@ -448,11 +474,14 @@ def run_llm_tool_loop_streaming(
             except ValueError as e:
                 consecutive_refusals += 1
                 tool_calls_audit.append({"name": name, "args": args_str, "status": "error", "truncated_output": str(e)})
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": f"Error: {e}",
-                })
+                if fallback_parsed:
+                    tool_results_text.append(f"[{name}]: Error: {e}")
+                else:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "content": f"Error: {e}",
+                    })
                 if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
                     final_text = "Job stopped: policy limits exceeded."
                     safety["reason"] = "policy_refused"
@@ -466,11 +495,14 @@ def run_llm_tool_loop_streaming(
                 consecutive_refusals += 1
                 err_msg = str(e) or "unknown"
                 tool_calls_audit.append({"name": name, "args": args, "status": "error", "truncated_output": err_msg})
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": f"Error: {err_msg}",
-                })
+                if fallback_parsed:
+                    tool_results_text.append(f"[{name}]: Error: {err_msg}")
+                else:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "content": f"Error: {err_msg}",
+                    })
                 if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
                     final_text = "Job stopped: policy limits exceeded."
                     safety["reason"] = "policy_refused"
@@ -487,10 +519,29 @@ def run_llm_tool_loop_streaming(
                 "status": "ok",
                 "truncated_output": truncated_result,
             })
+            if fallback_parsed:
+                tool_results_text.append(f"[{name}]: {truncated_result}")
+            else:
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": truncated_result,
+                })
+
+        # When fallback parser was used, inject results as plain-text user message
+        if fallback_parsed and tool_results_text:
+            results_block = "\n\n".join(tool_results_text)
             messages.append({
-                "role": "tool",
-                "tool_call_id": tc.get("id", ""),
-                "content": truncated_result,
+                "role": "assistant",
+                "content": content or "I'll look into that.",
+            })
+            messages.append({
+                "role": "user",
+                "content": (
+                    f"Here are the results from the tools you used:\n\n{results_block}\n\n"
+                    "Based on these results, provide your answer directly to the user. "
+                    "Do NOT call any more tools — just respond with your answer."
+                ),
             })
 
         if final_text is not None and safety.get("reason") == "policy_refused":

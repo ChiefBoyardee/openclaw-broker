@@ -241,6 +241,7 @@ def chat_with_tools(
             return {
                 "content": remaining_content,
                 "tool_calls": extracted_calls,
+                "fallback_parsed": True,
             }
         # No tool calls found — final answer, strip <think> blocks
         clean_content = _strip_think_blocks(raw_content)
