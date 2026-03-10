@@ -898,9 +898,6 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
         if not stream_client.verify_job_visible(max_retries=5, initial_delay=0.2):
             logger.warning(f"Job {job_id_for_streaming} not visible after retries, attempting to post anyway...")
 
-        # Post initial message (will fail silently if not enabled, but we checked above)
-        stream_client.post_message("Starting agentic task...", "info")
-
         # Run streaming loop
         envelope = run_llm_tool_loop_streaming(
             prompt, tools_list, repo_context, max_steps, config, bridge,

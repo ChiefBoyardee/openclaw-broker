@@ -305,29 +305,11 @@ class AgenticSession:
             logger.debug(f"Unknown chunk type: {chunk.chunk_type}")
 
     async def _handle_thinking(self, chunk: JobChunk) -> None:
-        """Handle a thinking step."""
-        if not self.config.enable_thinking_display:
-            return
-
+        """Handle a thinking step (internal only, not displayed to user)."""
         content = chunk.content or "Thinking..."
         step = chunk.metadata.get("step", 0) if chunk.metadata else 0
-
         self.thinking_steps.append(content)
-
-        if self._on_thinking:
-            await self._on_thinking(content, step)
-
-        # Add thinking reaction to message
-        try:
-            if step == 1:
-                await self.message.add_reaction("🤔")
-            elif step > 1 and step % 3 == 0:
-                # Cycle through thinking reactions
-                reactions = ["🤔", "💭", "🧠", "⚙️"]
-                reaction = reactions[step % len(reactions)]
-                await self.message.add_reaction(reaction)
-        except Exception as e:
-            logger.debug(f"Failed to add reaction: {e}")
+        logger.debug(f"Thinking step {step}: {content[:100]}")
 
     async def _handle_message(self, chunk: JobChunk) -> None:
         """Handle an intermediate message."""
