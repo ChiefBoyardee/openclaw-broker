@@ -55,6 +55,7 @@ ALLOWED_COMMANDS = frozenset({
     "repo_grep",
     "repo_readfile",
     "llm_task",
+    "embed",  # Remote embedding for Discord Bot memory offload
     # Browser tools
     "browser_navigate",
     "browser_snapshot",
