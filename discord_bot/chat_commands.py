@@ -316,6 +316,7 @@ class ChatManager:
         message_lower = message.lower()
         
         # Pattern: "my favorite X is Y" / "I love X" / "I hate X"
+        # Note: fact_type must be one of: 'preference', 'fact', 'task', 'constraint', 'topic'
         fav_patterns = [
             r"my favorite (\w+) is (.+?)(?:\.|$|!|\?)",
             r"i love (.+?)(?:\.|$|!|\?)",
@@ -327,8 +328,9 @@ class ChatManager:
             match = re.search(pattern, message_lower)
             if match:
                 if "favorite" in pattern:
-                    fact_type = f"favorite_{match.group(1)}"
-                    content = match.group(2).strip()
+                    # Use 'preference' type with descriptive content
+                    fact_type = "preference"
+                    content = f"Favorite {match.group(1)}: {match.group(2).strip()}"
                 elif "love" in pattern or "like" in pattern:
                     fact_type = "preference"
                     content = f"Likes: {match.group(1).strip()}"
@@ -350,7 +352,7 @@ class ChatManager:
                 # Clean up common extra words
                 location = re.sub(r'\b(right now|currently|at the moment)\b', '', location).strip()
                 if location:
-                    facts.append(("location", location))
+                    facts.append(("fact", f"Location: {location}"))
                     break  # Only take first location match
         
         # Pattern: "My name is X" / "I'm X" / "Call me X"
@@ -366,7 +368,7 @@ class ChatManager:
                 # Avoid capturing obvious non-names
                 non_names = ['a ', 'an ', 'the ', 'here', 'there', 'sad', 'happy', 'tired', 'busy', 'not ', 'really']
                 if not any(name.startswith(n) or name == n for n in non_names):
-                    facts.append(("name", name))
+                    facts.append(("fact", f"Name: {name}"))
                     break
         
         # Pattern: "I work as X" / "I'm a X" / "I do X for work"
@@ -379,7 +381,7 @@ class ChatManager:
             match = re.search(pattern, message_lower)
             if match:
                 job = match.group(1).strip()
-                facts.append(("occupation", job))
+                facts.append(("fact", f"Occupation: {job}"))
                 break
         
         # Pattern: "I have X" / "I own X" (pets, items)
@@ -393,7 +395,7 @@ class ChatManager:
                 item = match.group(1).strip()
                 # Only capture if it's likely interesting (has descriptor words)
                 if any(word in item for word in ['dog', 'cat', 'pet', 'car', 'bike', 'house', 'old', 'new', 'big', 'small']):
-                    facts.append(("possession", item))
+                    facts.append(("fact", f"Has: {item}"))
                     break
         
         # Pattern: "I'm X years old" / "I was born in X"
@@ -405,9 +407,9 @@ class ChatManager:
             match = re.search(pattern, message_lower)
             if match:
                 if "years" in pattern:
-                    facts.append(("age", f"{match.group(1)} years old"))
+                    facts.append(("fact", f"Age: {match.group(1)} years old"))
                 else:
-                    facts.append(("birth_year", match.group(1)))
+                    facts.append(("fact", f"Birth year: {match.group(1)}"))
                 break
         
         # Limit to first 2 facts to avoid over-extracting
