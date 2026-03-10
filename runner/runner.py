@@ -751,14 +751,21 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
 
         # Create streaming client
         stream_client = create_stream_client(job_id_for_streaming)
-        if not stream_client.enabled:
-            logger.warning(f"Streaming not enabled for job {job_id_for_streaming}, falling back to standard mode")
-
-        # Post initial message
-        stream_client.post_message("Starting agentic task...", "info")
-
+        
         # Build bridge
         bridge = _Bridge()
+        
+        if not stream_client.enabled:
+            logger.warning(f"Streaming not enabled for job {job_id_for_streaming} - ENABLE_STREAMING={os.environ.get('ENABLE_STREAMING', 'not set')}, has_worker_token={bool(os.environ.get('WORKER_TOKEN', ''))}. Falling back to standard mode.")
+            
+            # Fall back to standard non-streaming loop
+            envelope = run_llm_tool_loop(
+                prompt, tools_list, repo_context, max_steps, config, bridge, conversation_history
+            )
+            return json.dumps(envelope)
+
+        # Post initial message (will fail silently if not enabled, but we checked above)
+        stream_client.post_message("Starting agentic task...", "info")
 
         # Run streaming loop
         envelope = run_llm_tool_loop_streaming(

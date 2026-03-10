@@ -157,7 +157,7 @@ class BrokerStreamingClient:
             JobChunk objects as they arrive
         """
         if not self.enabled:
-            logger.warning(f"Streaming client not enabled for job {job_id}")
+            logger.warning(f"Streaming client not enabled for job {job_id} - AGENTIC_MODE={AGENTIC_MODE}, has_bot_token={bool(self.bot_token)}")
             return
 
         url = f"{self.broker_url}/jobs/{job_id}/chunks"
@@ -166,6 +166,8 @@ class BrokerStreamingClient:
         chunks_received = 0
 
         logger.info(f"Starting chunk polling for job {job_id}")
+        warning_interval = 10  # Warn every 10 seconds if no chunks received
+        last_warning_time = start_time
 
         while True:
             try:
@@ -209,8 +211,14 @@ class BrokerStreamingClient:
                 # Check timeout
                 elapsed = asyncio.get_event_loop().time() - start_time
                 if elapsed > timeout:
-                    logger.warning(f"Polling timeout for job {job_id}")
+                    logger.warning(f"Polling timeout for job {job_id} after {elapsed:.1f}s. Received {chunks_received} chunks.")
                     return
+
+                # Warn if no chunks received after warning_interval
+                time_since_warning = asyncio.get_event_loop().time() - last_warning_time
+                if chunks_received == 0 and time_since_warning > warning_interval:
+                    logger.warning(f"No chunks received for job {job_id} after {elapsed:.1f}s. Check runner ENABLE_STREAMING and WORKER_TOKEN settings.")
+                    last_warning_time = asyncio.get_event_loop().time()
 
                 # Check job status
                 job_done = await self._is_job_done(job_id)
