@@ -98,7 +98,7 @@ class ChatManager:
         if persona_key is None:
             # Check user preferences
             settings = self.memory.get_user_settings(user_id)
-            persona_key = settings.get('preferred_persona', 'helpful_assistant')
+            persona_key = settings.get('preferred_persona', self.personality.default_persona)
         
         session = ChatSession(
             user_id=user_id,
