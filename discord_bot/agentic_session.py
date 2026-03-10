@@ -445,8 +445,12 @@ class AgenticSession:
 
         logger.info(f"Agentic session complete. Final result length: {len(self.final_result)}")
 
+        # Send the final result to Discord
         if self._on_complete:
             await self._on_complete(self.final_result)
+        else:
+            # Send the final result as a message
+            await self._send_message(self.final_result)
 
         # Clear thinking reactions and add completion reaction
         try:
