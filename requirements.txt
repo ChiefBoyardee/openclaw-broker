@@ -12,5 +12,6 @@ pydantic>=2.5,<3
 requests>=2.31,<3
 openai>=1.40,<2
 discord.py>=2.3,<3
+aiohttp>=3.9,<4  # Required for agentic streaming mode
 pytest>=8.0,<9
 ruff>=0.4,<0.15

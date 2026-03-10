@@ -17,8 +17,9 @@ import logging
 import requests
 
 from runner.llm_config import get_llm_config
-from runner.llm_loop import run_llm_tool_loop
+from runner.llm_loop import run_llm_tool_loop, run_llm_tool_loop_streaming
 from runner.redaction import redact_output, should_redact_output
+from runner.streaming_client import create_stream_client
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,10 @@ RUNNER_MAX_LINES = int(os.environ.get("RUNNER_MAX_LINES", "400"))
 
 RESULT_RETRY_BACKOFF = [0.5, 1.0, 2.0]
 RESULT_RETRY_ATTEMPTS = 3
+
+# Streaming configuration
+LLM_MODE = os.environ.get("LLM_MODE", "agentic_streaming")  # 'simple' or 'agentic_streaming'
+ENABLE_BIDIRECTIONAL_TOOLS = os.environ.get("ENABLE_BIDIRECTIONAL_TOOLS", "true").lower() in ("true", "1", "yes")
 
 # Worker capabilities for broker job routing (Sprint 5): e.g. WORKER_CAPS=llm:vllm,repo_tools or LLM_CAP=llm:vllm
 WORKER_CAPS_STR = (os.environ.get("WORKER_CAPS", "") or "").strip()
@@ -437,6 +442,8 @@ def run_job(command: str, payload: str) -> str:
             "repo_grep",
             "repo_readfile",
             "embed",
+            "llm_task",
+            "llm_agentic",  # New streaming agentic mode
         ]
         # Add browser capabilities if playwright is available
         try:
@@ -483,7 +490,12 @@ def run_job(command: str, payload: str) -> str:
         out = {
             "worker_id": WORKER_ID,
             "capabilities": caps,
-            "version": "mvp",
+            "version": "2.0-agentic",
+            "streaming": {
+                "enabled": ENABLE_BIDIRECTIONAL_TOOLS,
+                "mode": LLM_MODE,
+                "heartbeat_seconds": int(os.environ.get("STREAMING_HEARTBEAT_SECONDS", "30")),
+            },
         }
         return json.dumps(out)
 
@@ -570,6 +582,16 @@ def run_job(command: str, payload: str) -> str:
         max_steps = int(max_steps)
         if max_steps < 1:
             max_steps = 1
+        # Check if streaming mode is requested
+        streaming = payload_obj.get("streaming", False) or LLM_MODE == "agentic_streaming"
+        job_id = payload_obj.get("job_id")  # Required for streaming
+
+        # Create streaming client if in streaming mode
+        stream_client = None
+        if streaming and job_id:
+            stream_client = create_stream_client(job_id)
+            logger.info(f"Streaming mode enabled for job {job_id}")
+
         # Bridge for tool_registry.dispatch: methods + allowed_tools, worker_id
         # Import browser tools
         from runner.browser_tools import (
@@ -684,7 +706,63 @@ def run_job(command: str, payload: str) -> str:
             def nginx_get_status(_self):
                 return nginx_get_status()
         bridge = _Bridge()
-        envelope = run_llm_tool_loop(prompt, tools_list, repo_context, max_steps, config, bridge, conversation_history)
+
+        if stream_client and stream_client.enabled:
+            # Use streaming version
+            envelope = run_llm_tool_loop_streaming(
+                prompt, tools_list, repo_context, max_steps, config, bridge,
+                conversation_history, stream_client
+            )
+        else:
+            # Use standard version
+            envelope = run_llm_tool_loop(prompt, tools_list, repo_context, max_steps, config, bridge, conversation_history)
+
+        return json.dumps(envelope)
+
+    if command == "llm_agentic":
+        # Agentic streaming mode - always uses streaming
+        try:
+            payload_obj = json.loads(payload) if payload else {}
+        except json.JSONDecodeError:
+            raise ValueError("llm_agentic payload must be valid JSON")
+
+        prompt = (payload_obj.get("prompt") or "").strip()
+        if not prompt:
+            raise ValueError("llm_agentic payload must include prompt")
+
+        job_id = payload_obj.get("job_id")
+        if not job_id:
+            raise ValueError("llm_agentic requires job_id for streaming")
+
+        config = get_llm_config()
+        if not config.get("base_url") or not config.get("model"):
+            raise ValueError("LLM not configured (set LLM_BASE_URL and LLM_MODEL)")
+
+        tools_list = payload_obj.get("tools") or list(config.get("allowed_tools", []))
+        repo_context = payload_obj.get("repo_context")
+        conversation_history = payload_obj.get("conversation_history")
+        max_steps = payload_obj.get("max_steps", config.get("max_steps", 10))
+        max_steps = int(max_steps)
+        if max_steps < 1:
+            max_steps = 1
+
+        # Create streaming client
+        stream_client = create_stream_client(job_id)
+        if not stream_client.enabled:
+            logger.warning(f"Streaming not enabled for job {job_id}, falling back to standard mode")
+
+        # Post initial message
+        stream_client.post_message("Starting agentic task...", "info")
+
+        # Build bridge
+        bridge = _Bridge()
+
+        # Run streaming loop
+        envelope = run_llm_tool_loop_streaming(
+            prompt, tools_list, repo_context, max_steps, config, bridge,
+            conversation_history, stream_client
+        )
+
         return json.dumps(envelope)
 
     if command == "embed":

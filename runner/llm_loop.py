@@ -234,3 +234,273 @@ def run_llm_tool_loop(
         "worker_id": worker_id,
         "safety": safety,
     }
+
+
+def run_llm_tool_loop_streaming(
+    prompt: str,
+    tools_requested: list[str],
+    repo_context: Optional[dict[str, str]],
+    max_steps: int,
+    config: dict[str, Any],
+    runner_bridge: Any,
+    conversation_history: Optional[list[dict[str, str]]] = None,
+    stream_client: Optional[Any] = None,
+) -> dict[str, Any]:
+    """
+    Streaming version of the LLM tool loop.
+
+    Streams intermediate results (thinking, tool calls, results) to the broker
+    for real-time user feedback. Supports bidirectional tool execution.
+    """
+    from runner.streaming_client import ChunkType
+
+    allowed = config.get("allowed_tools") or set()
+    tools_to_use = [t for t in tools_requested if t in allowed] if tools_requested else list(allowed)
+    if not tools_to_use:
+        tools_to_use = list(allowed)
+    tools_schema = get_tools_schema(set(tools_to_use))
+
+    if not tools_schema:
+        error_msg = "No tools available or configured."
+        if stream_client:
+            stream_client.post_final(error_msg)
+        return {
+            "final": error_msg,
+            "tool_calls": [],
+            "model": config.get("model", ""),
+            "worker_id": getattr(runner_bridge, "worker_id", ""),
+            "safety": {"reason": "no_tools"},
+        }
+
+    # Post initial thinking
+    if stream_client:
+        stream_client.post_thinking("Analyzing the request and planning approach...", step=0)
+        stream_client.post_progress(f"Starting agentic loop with {max_steps} max steps", percent=5)
+
+    # Build system content (same logic as non-streaming)
+    has_rich_persona = False
+    existing_system_content = ""
+
+    if conversation_history:
+        for msg in conversation_history:
+            if msg.get("role") == "system":
+                existing_system_content = msg.get("content", "")
+                persona_indicators = [
+                    "PERSONALITY:", "personality", "you are", "You are",
+                    "SPEECH PATTERNS:", "STYLE:", "CORE PERSONALITY:",
+                    "CAPABILITIES:", "MEMORY", "interests", "goals"
+                ]
+                has_rich_persona = any(indicator in existing_system_content for indicator in persona_indicators)
+                break
+
+    if has_rich_persona:
+        tool_addon = (
+            f"\n\nTOOL EXECUTION CONTEXT:\n"
+            f"- You have {max_steps} tool-use rounds available\n"
+            f"- Use your tools proactively and confidently when they help answer the user\n"
+            f"- Tool outputs may be truncated - work with what you receive\n"
+            f"- When ready to respond, provide your answer naturally (no 'I used X tool' preamble)\n"
+            f"- You can send intermediate messages to the user using the 'send_message' tool\n"
+        )
+        system_content = existing_system_content + tool_addon
+    else:
+        system_content = (
+            "You are a helpful assistant with access to repo tools and Discord capabilities. "
+            "Use tools to answer the user. You have at most {max_steps} tool-call rounds. "
+            "Tool output may be truncated. When you have enough information, respond with a final answer. "
+            "You can send intermediate messages to the user using the 'send_message' tool."
+        )
+
+    messages: list[dict[str, Any]] = []
+
+    if conversation_history:
+        has_system = False
+        for msg in conversation_history:
+            if msg.get("role") == "system" and not has_system:
+                messages.append({"role": "system", "content": system_content})
+                has_system = True
+            elif msg.get("role") != "system":
+                messages.append({"role": msg.get("role", "user"), "content": msg.get("content", "")})
+
+        if not has_system:
+            messages.insert(0, {"role": "system", "content": system_content})
+
+        messages.append({"role": "user", "content": prompt})
+    else:
+        messages = [
+            {"role": "system", "content": system_content},
+            {"role": "user", "content": prompt},
+        ]
+
+    tool_calls_audit: list[dict[str, Any]] = []
+    step = 0
+    final_text: Optional[str] = None
+    model_used = config.get("model", "")
+    worker_id = getattr(runner_bridge, "worker_id", "")
+    safety: dict[str, Any] = {}
+    max_output_bytes = config.get("max_output_bytes") or TOOL_OUTPUT_MAX_BYTES
+    max_tool_arg_bytes = config.get("max_tool_arg_bytes") or 4096
+    consecutive_refusals = 0
+
+    while step < max_steps:
+        step += 1
+
+        if stream_client:
+            stream_client.post_heartbeat()
+            stream_client.post_progress(f"Step {step}/{max_steps}: Calling LLM...", percent=10 + (step * 80 // max_steps))
+            stream_client.post_thinking(f"Step {step}: Planning next action...", step=step)
+
+        response = chat_with_tools(
+            messages,
+            tools_schema,
+            base_url=config.get("base_url", ""),
+            api_key=config.get("api_key", ""),
+            model=config.get("model", ""),
+            temperature=config.get("temperature", 0.2),
+            max_tokens=config.get("max_tokens", 4096),
+        )
+
+        content = response.get("content")
+        tc_list = response.get("tool_calls")
+
+        if content and not tc_list:
+            # Final answer received
+            final_text = content
+            if stream_client:
+                stream_client.post_message("Task completed!", "success")
+                stream_client.post_progress("Complete", percent=100)
+            break
+
+        if not tc_list:
+            final_text = content or "(no response)"
+            break
+
+        # Process tool calls
+        assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or None}
+        if tc_list:
+            assistant_msg["tool_calls"] = [
+                {"id": tc.get("id"), "type": "function", "function": {"name": tc.get("name"), "arguments": tc.get("arguments", "{}")}}
+                for tc in tc_list
+            ]
+        messages.append(assistant_msg)
+
+        for tc in tc_list:
+            name = tc.get("name", "")
+            args_str = tc.get("arguments", "{}")
+
+            if stream_client:
+                stream_client.post_thinking(f"Calling tool: {name}", step=step)
+                stream_client.post_tool_call(name, args_str)
+
+            # Handle special discord_send_message tool
+            if name == "discord_send_message" and stream_client:
+                try:
+                    args = parse_tool_args(args_str)
+                    message = args.get("message", "")
+                    msg_type = args.get("type", "info")
+                    if message:
+                        stream_client.post_message(message, msg_type)
+                    # Add successful tool result
+                    tool_result = json.dumps({"sent": True, "message": message})
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "content": tool_result,
+                    })
+                    tool_calls_audit.append({
+                        "name": name,
+                        "args": args,
+                        "status": "ok",
+                        "truncated_output": tool_result[:max_output_bytes],
+                    })
+                    continue
+                except Exception as e:
+                    logger.warning(f"Error handling discord_send_message: {e}")
+
+            # Reject oversized tool args
+            if len(args_str.encode("utf-8")) > max_tool_arg_bytes:
+                err = "tool arguments too large"
+                consecutive_refusals += 1
+                tool_calls_audit.append({"name": name, "args": "<oversized>", "status": "error", "truncated_output": err})
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": f"Error: {err}",
+                })
+                if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
+                    final_text = "Job stopped: policy limits exceeded."
+                    safety["reason"] = "policy_refused"
+                    logger.warning("event=llm_task_policy_refused job_stopped=policy_limits")
+                    break
+                continue
+
+            try:
+                args = parse_tool_args(args_str)
+            except ValueError as e:
+                consecutive_refusals += 1
+                tool_calls_audit.append({"name": name, "args": args_str, "status": "error", "truncated_output": str(e)})
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": f"Error: {e}",
+                })
+                if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
+                    final_text = "Job stopped: policy limits exceeded."
+                    safety["reason"] = "policy_refused"
+                    break
+                continue
+
+            # Execute tool
+            try:
+                result = dispatch(name, args, repo_context, runner_bridge=runner_bridge)
+                if stream_client:
+                    stream_client.post_tool_result(name, result[:200] + "..." if len(result) > 200 else result)
+            except Exception as e:
+                consecutive_refusals += 1
+                err_msg = str(e) or "unknown"
+                tool_calls_audit.append({"name": name, "args": args, "status": "error", "truncated_output": err_msg})
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", ""),
+                    "content": f"Error: {err_msg}",
+                })
+                if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
+                    final_text = "Job stopped: policy limits exceeded."
+                    safety["reason"] = "policy_refused"
+                    break
+                continue
+
+            consecutive_refusals = 0
+            truncated_result, was_truncated = _truncate_for_audit(result, max_output_bytes)
+            if was_truncated:
+                safety["truncations"] = safety.get("truncations", 0) + 1
+            tool_calls_audit.append({
+                "name": name,
+                "args": args,
+                "status": "ok",
+                "truncated_output": truncated_result,
+            })
+            messages.append({
+                "role": "tool",
+                "tool_call_id": tc.get("id", ""),
+                "content": truncated_result,
+            })
+
+        if final_text is not None and safety.get("reason") == "policy_refused":
+            break
+
+    if final_text is None:
+        final_text = "Max tool steps reached without final answer."
+        safety["max_steps_reached"] = True
+
+    # Post final chunk
+    if stream_client:
+        stream_client.post_final(final_text)
+
+    return {
+        "final": final_text,
+        "tool_calls": tool_calls_audit,
+        "model": model_used,
+        "worker_id": worker_id,
+        "safety": safety,
+    }

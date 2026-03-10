@@ -1,11 +1,96 @@
 """
 Tool registry and dispatcher for LLM tool-calling (Sprint 5). OpenAI function-calling schema; dispatch to runner helpers.
+
+Supports bidirectional tool categories:
+- RUNNER_LOCAL: Tools executed entirely on the runner (repo tools, browser, etc.)
+- BIDIRECTIONAL: Tools that can be executed by either runner or bot
+- BOT_ONLY: Tools that must be executed by the Discord bot (Discord-native tools)
 """
 from __future__ import annotations
 
 import json
 import re
+from enum import Enum
 from typing import Any, Optional
+
+
+class ToolCategory(Enum):
+    """Categories for tool execution location."""
+    RUNNER_LOCAL = "runner_local"      # Executed on runner
+    BIDIRECTIONAL = "bidirectional"    # Can be executed by either
+    BOT_ONLY = "bot_only"              # Must be executed by bot
+
+
+# Tool category mapping
+TOOL_CATEGORIES: dict[str, ToolCategory] = {
+    # Runner-local tools
+    "repo_list": ToolCategory.RUNNER_LOCAL,
+    "repo_status": ToolCategory.RUNNER_LOCAL,
+    "repo_last_commit": ToolCategory.RUNNER_LOCAL,
+    "repo_grep": ToolCategory.RUNNER_LOCAL,
+    "repo_readfile": ToolCategory.RUNNER_LOCAL,
+    "plan_echo": ToolCategory.RUNNER_LOCAL,
+    "approve_echo": ToolCategory.RUNNER_LOCAL,
+    # Browser tools (runner-local)
+    "browser_navigate": ToolCategory.RUNNER_LOCAL,
+    "browser_snapshot": ToolCategory.RUNNER_LOCAL,
+    "browser_click": ToolCategory.RUNNER_LOCAL,
+    "browser_type": ToolCategory.RUNNER_LOCAL,
+    "browser_search": ToolCategory.RUNNER_LOCAL,
+    "browser_extract_article": ToolCategory.RUNNER_LOCAL,
+    "browser_close": ToolCategory.RUNNER_LOCAL,
+    # GitHub tools (runner-local, needs API key on runner)
+    "github_create_repo": ToolCategory.RUNNER_LOCAL,
+    "github_list_repos": ToolCategory.RUNNER_LOCAL,
+    "github_create_issue": ToolCategory.RUNNER_LOCAL,
+    "github_list_issues": ToolCategory.RUNNER_LOCAL,
+    "github_read_file": ToolCategory.RUNNER_LOCAL,
+    "github_write_file": ToolCategory.RUNNER_LOCAL,
+    "github_search_repos": ToolCategory.RUNNER_LOCAL,
+    "github_search_code": ToolCategory.RUNNER_LOCAL,
+    "github_get_user": ToolCategory.RUNNER_LOCAL,
+    # Website tools (runner-local)
+    "website_init": ToolCategory.RUNNER_LOCAL,
+    "website_write_file": ToolCategory.RUNNER_LOCAL,
+    "website_read_file": ToolCategory.RUNNER_LOCAL,
+    "website_list_files": ToolCategory.RUNNER_LOCAL,
+    "website_create_post": ToolCategory.RUNNER_LOCAL,
+    "website_create_knowledge_page": ToolCategory.RUNNER_LOCAL,
+    "website_update_about": ToolCategory.RUNNER_LOCAL,
+    "website_get_stats": ToolCategory.RUNNER_LOCAL,
+    # Nginx tools (runner-local, needs sudo)
+    "nginx_generate_config": ToolCategory.RUNNER_LOCAL,
+    "nginx_install_config": ToolCategory.RUNNER_LOCAL,
+    "nginx_enable_site": ToolCategory.RUNNER_LOCAL,
+    "nginx_disable_site": ToolCategory.RUNNER_LOCAL,
+    "nginx_remove_config": ToolCategory.RUNNER_LOCAL,
+    "nginx_test_config": ToolCategory.RUNNER_LOCAL,
+    "nginx_reload": ToolCategory.RUNNER_LOCAL,
+    "nginx_get_status": ToolCategory.RUNNER_LOCAL,
+    # Discord-native tools (bot-only)
+    "discord_send_message": ToolCategory.BOT_ONLY,
+    "discord_send_embed": ToolCategory.BOT_ONLY,
+    "discord_add_reaction": ToolCategory.BOT_ONLY,
+    "discord_upload_file": ToolCategory.BOT_ONLY,
+    "discord_edit_message": ToolCategory.BOT_ONLY,
+    "discord_reply": ToolCategory.BOT_ONLY,
+}
+
+
+def get_tool_category(tool_name: str) -> ToolCategory:
+    """Get the category for a tool."""
+    return TOOL_CATEGORIES.get(tool_name, ToolCategory.RUNNER_LOCAL)
+
+
+def is_bidirectional_tool(tool_name: str) -> bool:
+    """Check if a tool is bidirectional (can be executed by bot)."""
+    category = get_tool_category(tool_name)
+    return category in (ToolCategory.BIDIRECTIONAL, ToolCategory.BOT_ONLY)
+
+
+def is_bot_only_tool(tool_name: str) -> bool:
+    """Check if a tool must be executed by the bot."""
+    return get_tool_category(tool_name) == ToolCategory.BOT_ONLY
 
 # URL-like pattern: reject strings that could be used for SSRF (Sprint 3)
 _URL_LIKE_RE = re.compile(
@@ -581,6 +666,90 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
+    # Discord-native tools (bidirectional - executed by bot)
+    {
+        "type": "function",
+        "function": {
+            "name": "discord_send_message",
+            "description": "Send a text message to the Discord channel. Use this to provide intermediate updates to the user during long-running tasks.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "The message content to send (max 2000 chars)",
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": ["info", "success", "warning", "error"],
+                        "description": "Message type for styling",
+                    },
+                },
+                "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "discord_send_embed",
+            "description": "Send a rich embed message to the Discord channel. Useful for structured data or formatted results.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Embed title"},
+                    "description": {"type": "string", "description": "Embed description"},
+                    "color": {"type": "integer", "description": "Embed color as decimal"},
+                },
+                "required": ["title", "description"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "discord_add_reaction",
+            "description": "Add a reaction emoji to the user's message. Use sparingly to indicate progress or status.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "emoji": {"type": "string", "description": "The emoji to add"},
+                },
+                "required": ["emoji"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "discord_upload_file",
+            "description": "Upload a file attachment to the channel.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "File content as string"},
+                    "filename": {"type": "string", "description": "Name of the file"},
+                    "description": {"type": "string", "description": "Optional message"},
+                },
+                "required": ["content", "filename"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "discord_reply",
+            "description": "Reply directly to the user's message.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "content": {"type": "string", "description": "Reply content"},
+                    "mention": {"type": "boolean", "description": "Whether to mention the user"},
+                },
+                "required": ["content"],
+            },
+        },
+    },
 ]
 
 
@@ -605,10 +774,21 @@ def dispatch(
     repo_list(), repo_status(repo), repo_last_commit(repo), repo_grep(repo, query, path),
     repo_readfile(repo, path, start_line, end_line), plan_echo(text), approve_echo(plan_id).
     Returns result string (JSON or plain). Raises ValueError if tool not allowed or args invalid.
+
+    For BOT_ONLY tools, returns a placeholder indicating the tool needs bot-side execution.
     """
     allowed = getattr(runner_bridge, "allowed_tools", None)
     if allowed is not None and name not in allowed:
         raise ValueError(f"tool not allowed: {name}")
+
+    # Handle BOT_ONLY tools - return placeholder for bot execution
+    if is_bot_only_tool(name):
+        return json.dumps({
+            "tool": name,
+            "params": args,
+            "status": "pending_bot_execution",
+            "note": "This tool must be executed by the Discord bot. Creating bidirectional tool call."
+        })
     # Apply repo_context defaults
     repo = args.get("repo") or (repo_context or {}).get("repo")
     path_hint = (repo_context or {}).get("path_hint") or ""

@@ -50,6 +50,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from broker.caps import is_command_allowed, job_matches_worker, parse_worker_caps
+from broker.streaming import (
+    ChunkType,
+    JobChunk,
+    JobToolCall,
+    ToolCallStatus,
+    get_stream_manager,
+)
 
 DB_PATH = os.environ.get("BROKER_DB", "/var/lib/openclaw-broker/broker.db")
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")
@@ -69,7 +76,14 @@ MAX_REQUIRES_BYTES = 2048  # 2KB
 # Rate limit: token_hash -> list of create timestamps in last 60s (purged periodically)
 _rate_limit_store: dict[str, list[float]] = defaultdict(list)
 
+# Streaming configuration
+ENABLE_STREAMING = os.environ.get("ENABLE_STREAMING", "true").lower() in ("true", "1", "yes")
+MAX_CHUNK_AGE_SECONDS = int(os.environ.get("MAX_CHUNK_AGE_SECONDS", "3600"))
+
 app = FastAPI(title="OpenClaw Broker")
+
+# Initialize streaming manager if enabled
+stream_manager = get_stream_manager(DB_PATH) if ENABLE_STREAMING else None
 
 # Standard job JSON keys (null if absent)
 JOB_KEYS = (
@@ -227,6 +241,31 @@ class JobFail(BaseModel):
     error: str = "unknown"
 
 
+# Streaming models
+class ChunkCreate(BaseModel):
+    chunk_type: str
+    content: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class ChunkList(BaseModel):
+    chunks: list
+    total_count: int
+
+
+class ToolCallCreate(BaseModel):
+    tool_name: str
+    tool_args: Optional[dict] = None
+
+
+class ToolCallResult(BaseModel):
+    result: str
+
+
+class ToolCallFail(BaseModel):
+    error: str
+
+
 # ----------------------------
 # Routes
 # ----------------------------
@@ -234,6 +273,29 @@ class JobFail(BaseModel):
 def health():
     # Keep compatibility with your existing checks
     return {"ok": True, "ts_bound": True}
+
+
+@app.get("/capabilities", dependencies=[Depends(require_bot_token)])
+def get_capabilities():
+    """Return broker capabilities including streaming support."""
+    return {
+        "streaming_enabled": ENABLE_STREAMING,
+        "streaming_endpoints": {
+            "chunks": "/jobs/{id}/chunks",
+            "stream": "/jobs/{id}/stream",
+            "tool_calls": "/jobs/{id}/tool_calls",
+        },
+        "chunk_types": [
+            ChunkType.THINKING,
+            ChunkType.TOOL_CALL,
+            ChunkType.TOOL_RESULT,
+            ChunkType.MESSAGE,
+            ChunkType.PROGRESS,
+            ChunkType.FINAL,
+            ChunkType.HEARTBEAT,
+        ],
+        "version": "2.0-agentic",
+    }
 
 
 def _rate_limit_check(x_bot_token: Optional[str]) -> None:
@@ -438,6 +500,293 @@ def fail_job(job_id: str, body: JobFail):
         )
     _audit("job_failed", job_id=job_id)
     return {"ok": True, "status": "failed"}
+
+
+# ----------------------------
+# Streaming Routes (Agentic Job Streaming)
+# ----------------------------
+
+@app.post("/jobs/{job_id}/chunks", dependencies=[Depends(require_worker_token)])
+def add_job_chunk(job_id: str, body: ChunkCreate):
+    """
+    Add a chunk to a job stream. Used by runners to stream intermediate results.
+    """
+    if not ENABLE_STREAMING or not stream_manager:
+        raise HTTPException(503, "streaming not enabled")
+
+    # Verify job exists and is running
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT status FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(404, "job not found")
+
+    if row["status"] not in ("running", "queued"):
+        # Still allow chunks for done/failed jobs briefly (final messages)
+        pass
+
+    chunk_id = stream_manager.add_chunk(
+        job_id=job_id,
+        chunk_type=body.chunk_type,
+        content=body.content,
+        metadata=body.metadata,
+    )
+
+    return {"ok": True, "chunk_id": chunk_id}
+
+
+@app.get("/jobs/{job_id}/chunks", dependencies=[Depends(require_bot_token)])
+def get_job_chunks(
+    job_id: str,
+    after_id: Optional[int] = None,
+    chunk_type: Optional[str] = None,
+    limit: int = 100,
+):
+    """
+    Get chunks for a job. Used by bots to poll for streaming results.
+    """
+    if not ENABLE_STREAMING or not stream_manager:
+        raise HTTPException(503, "streaming not enabled")
+
+    # Verify job exists
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(404, "job not found")
+
+    chunk_types = [chunk_type] if chunk_type else None
+    chunks = stream_manager.get_chunks(job_id, after_id, chunk_types, limit)
+
+    return {
+        "chunks": [
+            {
+                "id": c.id,
+                "chunk_type": c.chunk_type,
+                "content": c.content,
+                "metadata": c.metadata,
+                "created_at": c.created_at,
+            }
+            for c in chunks
+        ],
+        "count": len(chunks),
+    }
+
+
+@app.post("/jobs/{job_id}/tool_calls", dependencies=[Depends(require_worker_token)])
+def create_job_tool_call(job_id: str, body: ToolCallCreate):
+    """
+    Create a bidirectional tool call request. Runner requests tool execution.
+    """
+    if not ENABLE_STREAMING or not stream_manager:
+        raise HTTPException(503, "streaming not enabled")
+
+    # Verify job exists and is running
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT status FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(404, "job not found")
+
+    if row["status"] != "running":
+        raise HTTPException(400, "job not in running state")
+
+    tool_call_id = stream_manager.create_tool_call(
+        job_id=job_id,
+        tool_name=body.tool_name,
+        tool_args=body.tool_args,
+    )
+
+    return {"ok": True, "tool_call_id": tool_call_id}
+
+
+@app.get("/jobs/{job_id}/tool_calls", dependencies=[Depends(require_bot_token)])
+def get_job_tool_calls(
+    job_id: str,
+    status: Optional[str] = None,
+    limit: int = 10,
+):
+    """
+    Get tool calls for a job. Bot polls for pending tool execution requests.
+    """
+    if not ENABLE_STREAMING or not stream_manager:
+        raise HTTPException(503, "streaming not enabled")
+
+    # Verify job exists
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(404, "job not found")
+
+    if status == ToolCallStatus.PENDING or not status:
+        calls = stream_manager.get_pending_tool_calls(job_id, limit)
+    else:
+        # Get all tool calls for job (would need additional method)
+        calls = []
+
+    return {
+        "tool_calls": [
+            {
+                "id": c.id,
+                "tool_name": c.tool_name,
+                "tool_args": c.tool_args,
+                "status": c.status,
+                "requested_at": c.requested_at,
+            }
+            for c in calls
+        ],
+        "count": len(calls),
+    }
+
+
+@app.post("/tool_calls/{tool_call_id}/result", dependencies=[Depends(require_bot_token)])
+def complete_tool_call(tool_call_id: int, body: ToolCallResult):
+    """
+    Complete a tool call with result. Bot provides tool execution result.
+    """
+    if not ENABLE_STREAMING or not stream_manager:
+        raise HTTPException(503, "streaming not enabled")
+
+    success = stream_manager.complete_tool_call(tool_call_id, body.result)
+
+    if not success:
+        raise HTTPException(404, "tool call not found")
+
+    return {"ok": True, "status": "completed"}
+
+
+@app.post("/tool_calls/{tool_call_id}/fail", dependencies=[Depends(require_bot_token)])
+def fail_tool_call(tool_call_id: int, body: ToolCallFail):
+    """
+    Mark a tool call as failed. Bot reports tool execution failure.
+    """
+    if not ENABLE_STREAMING or not stream_manager:
+        raise HTTPException(503, "streaming not enabled")
+
+    success = stream_manager.fail_tool_call(tool_call_id, body.error)
+
+    if not success:
+        raise HTTPException(404, "tool call not found")
+
+    return {"ok": True, "status": "failed"}
+
+
+@app.get("/tool_calls/{tool_call_id}", dependencies=[Depends(require_worker_token)])
+def get_tool_call(tool_call_id: int):
+    """
+    Get a specific tool call. Runner polls for tool call status/result.
+    """
+    if not ENABLE_STREAMING or not stream_manager:
+        raise HTTPException(503, "streaming not enabled")
+
+    call = stream_manager.get_tool_call(tool_call_id)
+
+    if not call:
+        raise HTTPException(404, "tool call not found")
+
+    return {
+        "id": call.id,
+        "job_id": call.job_id,
+        "tool_name": call.tool_name,
+        "tool_args": call.tool_args,
+        "status": call.status,
+        "result": call.result,
+        "requested_at": call.requested_at,
+        "completed_at": call.completed_at,
+    }
+
+
+# Server-Sent Events streaming endpoint
+@app.get("/jobs/{job_id}/stream", dependencies=[Depends(require_bot_token)])
+async def stream_job(job_id: str):
+    """
+    Server-Sent Events stream for job chunks. Real-time streaming endpoint.
+    """
+    if not ENABLE_STREAMING or not stream_manager:
+        raise HTTPException(503, "streaming not enabled")
+
+    # Verify job exists
+    with db_conn() as conn:
+        row = conn.execute(
+            "SELECT status FROM jobs WHERE id = ?",
+            (job_id,),
+        ).fetchone()
+
+    if not row:
+        raise HTTPException(404, "job not found")
+
+    from fastapi.responses import StreamingResponse
+    import asyncio
+
+    async def event_generator():
+        last_chunk_id = 0
+        empty_count = 0
+        max_empty = 180  # ~3 minutes of empty polls (at 1s intervals)
+
+        while empty_count < max_empty:
+            chunks = stream_manager.get_chunks(job_id, after_id=last_chunk_id, limit=50)
+
+            if chunks:
+                empty_count = 0
+                for chunk in chunks:
+                    data = {
+                        "id": chunk.id,
+                        "type": chunk.chunk_type,
+                        "content": chunk.content,
+                        "metadata": chunk.metadata,
+                        "created_at": chunk.created_at,
+                    }
+                    yield f"data: {json.dumps(data)}\n\n"
+                    last_chunk_id = chunk.id
+
+                    # Stop if final chunk received
+                    if chunk.chunk_type == ChunkType.FINAL:
+                        return
+            else:
+                empty_count += 1
+
+            # Check if job is done/failed and no more chunks expected
+            with db_conn() as conn:
+                status_row = conn.execute(
+                    "SELECT status FROM jobs WHERE id = ?",
+                    (job_id,),
+                ).fetchone()
+
+            if status_row and status_row["status"] in ("done", "failed"):
+                # Give a moment for any final chunks to be written
+                if empty_count > 5:
+                    yield f"data: {json.dumps({'type': 'stream_end'})}\n\n"
+                    return
+
+            # Heartbeat to keep connection alive
+            yield ":heartbeat\n\n"
+            await asyncio.sleep(1)
+
+        # Timeout - stream ended without final chunk
+        yield f"data: {json.dumps({'type': 'timeout', 'message': 'Stream timeout'})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering for SSE
+        },
+    )
 
 
 if __name__ == "__main__":

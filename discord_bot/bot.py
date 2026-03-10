@@ -38,11 +38,19 @@ try:
     from .self_memory import get_self_memory
     from .personality import get_personality_engine
     from .natural_language_router import detect_intent, IntentResult
+    from .agentic_session import (
+        AgenticSession,
+        AgenticConfig,
+        get_agentic_manager,
+    )
+    from .streaming_client import get_streaming_client
     HAS_CONVERSATION_FEATURES = True
     HAS_NL_ROUTER = True
+    HAS_AGENTIC_MODE = True
 except ImportError as e:
     HAS_CONVERSATION_FEATURES = False
     HAS_NL_ROUTER = False
+    HAS_AGENTIC_MODE = False
     logger.warning(f"Conversation features not available: {e}")
 
 # --- Config from env ---
@@ -70,6 +78,12 @@ EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "none").lower()  # 'op
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
 CONVERSATION_TIMEOUT_MINUTES = float(os.environ.get("CONVERSATION_TIMEOUT_MINUTES", "30"))
+
+# --- Agentic Mode Config ---
+AGENTIC_MODE = os.environ.get("AGENTIC_MODE", "true").lower() in ("true", "1", "yes")
+AGENTIC_AUTO_TRIGGER = os.environ.get("AGENTIC_AUTO_TRIGGER", "true").lower() in ("true", "1", "yes")
+AGENTIC_MAX_STREAM_WAIT = float(os.environ.get("AGENTIC_MAX_STREAM_WAIT", "300"))
+AGENTIC_DEFAULT_MAX_STEPS = int(os.environ.get("AGENTIC_DEFAULT_MAX_STEPS", "10"))
 
 MAX_DISPLAY_LEN = 1500
 
@@ -684,6 +698,24 @@ async def on_message(message: discord.Message):
             await message.reply(f"Failed to update presence: {e}")
         return
 
+    # --- Agentic Mode Command ---
+    if HAS_AGENTIC_MODE and AGENTIC_MODE and cmd == "agentic":
+        if not payload:
+            await message.reply(
+                "**Agentic Mode** - Streaming multi-turn conversations with tool calling.\n\n"
+                "Usage: `agentic <your request>`\n\n"
+                "This mode enables:\n"
+                "- Real-time streaming responses\n"
+                "- Multi-turn tool loops\n"
+                "- Intermediate progress updates\n"
+                "- Discord-native interactions\n\n"
+                "Or use `ask <request>` with high-confidence tool intents to auto-trigger agentic mode."
+            )
+            return
+
+        await handle_agentic_command(message, payload)
+        return
+
     # --- Conversational/Chat Commands ---
     if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
         if cmd == "chat":
@@ -788,6 +820,9 @@ async def on_message(message: discord.Message):
                 "• \"Search the web for Python tips\" - Web research",
                 "• \"List my GitHub issues\" - GitHub operations",
                 "",
+                "**Agentic Mode (Streaming):**",
+                "`agentic <request>` - Multi-turn streaming with tools",
+                "",
                 "**Conversation Commands:**",
                 "`persona [name]` - Switch personality",
                 "`memory [status/clear/on/off]` - Memory management",
@@ -841,27 +876,37 @@ async def on_message(message: discord.Message):
                 
             elif intent_result.intent in ("repo_explore", "repo_search", "file_read"):
                 # Repository operations with tool awareness
-                async with message.channel.typing():
-                    response = await handle_chat_command(
-                        bot_instance(), message, text,
-                        intent_result=intent_result,
-                        enable_tools=True
-                    )
-                await reply_in_chunks(message, response)
-                
+                # Use agentic mode if auto-trigger is enabled and confidence is high
+                if HAS_AGENTIC_MODE and AGENTIC_MODE and AGENTIC_AUTO_TRIGGER and intent_result.confidence > 0.7:
+                    logger.info(f"Auto-triggering agentic mode for {intent_result.intent} (confidence: {intent_result.confidence:.2f})")
+                    await handle_agentic_command(message, text)
+                else:
+                    async with message.channel.typing():
+                        response = await handle_chat_command(
+                            bot_instance(), message, text,
+                            intent_result=intent_result,
+                            enable_tools=True
+                        )
+                    await reply_in_chunks(message, response)
+
             elif intent_result.intent == "github_ops":
                 # GitHub operations
                 await _handle_natural_github_command(message, intent_result, text)
                 
             elif intent_result.intent == "web_research":
                 # Web research with browser tools
-                async with message.channel.typing():
-                    response = await handle_chat_command(
-                        bot_instance(), message, text,
-                        intent_result=intent_result,
-                        enable_tools=True
-                    )
-                await reply_in_chunks(message, response)
+                # Use agentic mode for web research if auto-trigger is enabled
+                if HAS_AGENTIC_MODE and AGENTIC_MODE and AGENTIC_AUTO_TRIGGER and intent_result.confidence > 0.6:
+                    logger.info(f"Auto-triggering agentic mode for web_research (confidence: {intent_result.confidence:.2f})")
+                    await handle_agentic_command(message, text)
+                else:
+                    async with message.channel.typing():
+                        response = await handle_chat_command(
+                            bot_instance(), message, text,
+                            intent_result=intent_result,
+                            enable_tools=True
+                        )
+                    await reply_in_chunks(message, response)
                 
             elif intent_result.intent == "website_manage":
                 # Website management
@@ -1116,6 +1161,11 @@ async def _show_extended_help(message: discord.Message):
 - Just chat with me naturally - I remember our conversations!
 - Ask me anything - I'll do my best to help
 
+**Agentic Mode (Streaming):**
+- `agentic <request>` - Multi-turn streaming with tool calling
+- Real-time progress updates and intermediate results
+- Automatic for complex tool requests when `AGENTIC_AUTO_TRIGGER=true`
+
 **Repository Operations:**
 - "Show me my repos" - List your repositories
 - "Search for authentication in the discord_bot folder" - Search code
@@ -1148,8 +1198,113 @@ async def _show_extended_help(message: discord.Message):
 I also respond to all the traditional commands like `ping`, `repos`, `grep`, `cat`, etc.
 
 What would you like to do?"""
-    
+
     await message.reply(help_text)
+
+
+async def handle_agentic_command(message: discord.Message, prompt: str):
+    """
+    Handle the agentic command - streaming multi-turn conversation with tool calling.
+    """
+    if not HAS_AGENTIC_MODE:
+        await message.reply("Agentic mode is not available. Check your configuration.")
+        return
+
+    try:
+        # Create agentic session
+        manager = get_agentic_manager()
+
+        # Get memory for conversation context
+        memory = None
+        if MEMORY_ENABLED:
+            from .memory import get_memory
+            memory = get_memory()
+
+        conversation_id = f"{message.channel.id}_{message.author.id}_{int(time.time())}"
+
+        # Build conversation history from memory
+        conversation_history = []
+        if memory:
+            try:
+                context = memory.get_conversation_context(
+                    conversation_id=conversation_id,
+                    user_id=str(message.author.id),
+                    query=prompt,
+                    max_tokens=2000
+                )
+                for msg in context.get('recent_messages', []):
+                    conversation_history.append({
+                        "role": msg.role,
+                        "content": msg.content
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to get memory context: {e}")
+
+        # Create session with config
+        config = AgenticConfig(
+            max_steps=AGENTIC_DEFAULT_MAX_STEPS,
+            enable_thinking_display=True,
+            enable_progress_updates=True,
+            max_stream_wait=AGENTIC_MAX_STREAM_WAIT,
+        )
+
+        session = await manager.create_session(
+            message=message,
+            config=config,
+            conversation_id=conversation_id,
+            persona_key=DEFAULT_PERSONA,
+        )
+
+        # Set up callbacks for Discord interaction
+        async def on_message(content: str):
+            await reply_in_chunks(message, content)
+
+        async def on_thinking(thought: str, step: int):
+            logger.debug(f"Thinking step {step}: {thought[:100]}...")
+
+        async def on_tool_call(tool_name: str, tool_args: dict):
+            logger.info(f"Tool call: {tool_name} with args {tool_args}")
+
+        async def on_complete(final: str):
+            logger.info(f"Agentic session complete, final length: {len(final)}")
+
+        session.on_message(on_message)
+        session.on_thinking(on_thinking)
+        session.on_tool_call(on_tool_call)
+        session.on_complete(on_complete)
+
+        # Show typing indicator while processing
+        async with message.channel.typing():
+            # Start the session
+            final_result = await session.start(
+                prompt=prompt,
+                conversation_history=conversation_history,
+            )
+
+        if final_result:
+            # Store in memory if enabled
+            if memory:
+                try:
+                    memory.add_message(
+                        conversation_id=conversation_id,
+                        user_id=str(message.author.id),
+                        role="user",
+                        content=prompt,
+                    )
+                    memory.add_message(
+                        conversation_id=conversation_id,
+                        user_id=str(message.author.id),
+                        role="assistant",
+                        content=final_result,
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to store in memory: {e}")
+        else:
+            await message.reply("❌ Agentic session failed to produce a result. Check logs for details.")
+
+    except Exception as e:
+        logger.exception(f"Error in agentic command: {e}")
+        await message.reply(f"❌ Error in agentic mode: {str(e)[:200]}")
 
 
 # Global bot instance reference for chat commands
