@@ -429,7 +429,20 @@ class PersonalityEngine:
         
         # Use specified or default
         key = persona_key or self.default_persona
-        return self.personas.get(key, self.personas[self.default_persona])
+        if key in self.personas:
+            return self.personas[key]
+        # Fallback to default if available, otherwise first available persona
+        if self.default_persona in self.personas:
+            return self.personas[self.default_persona]
+        if self.personas:
+            return next(iter(self.personas.values()))
+        # Last resort - create a minimal default
+        logger.error("No personas available! Creating minimal fallback.")
+        return PersonaConfig(
+            name="Default",
+            system_prompt="You are a helpful assistant.",
+            voice_settings={"temperature": 0.7}
+        )
     
     def set_user_persona(self, user_id: str, persona_key: str):
         """Set preferred persona for a user."""
@@ -700,8 +713,11 @@ Ensure your response matches this personality. Do not drift toward generic respo
         Returns:
             Number of personas loaded.
         """
+        abs_path = os.path.abspath(file_path)
+        logger.info(f"Loading custom personas from: {abs_path}")
+
         if not os.path.isfile(file_path):
-            logger.debug(f"No custom personas file at: {file_path}")
+            logger.warning(f"Custom personas file not found: {abs_path}")
             return 0
 
         try:
@@ -710,12 +726,16 @@ Ensure your response matches this personality. Do not drift toward generic respo
             if loaded:
                 names = ', '.join(f"{k} ({v.name})" for k, v in loaded.items())
                 logger.info(f"Loaded {len(loaded)} custom persona(s): {names}")
+            else:
+                logger.warning(f"No valid personas found in {abs_path}")
+            # Log available personas after loading
+            logger.info(f"Total available personas: {list(self.personas.keys())}")
             return len(loaded)
         except (json.JSONDecodeError, ValueError) as e:
-            logger.error(f"Failed to load custom personas from {file_path}: {e}")
+            logger.error(f"Failed to load custom personas from {abs_path}: {e}")
             return 0
         except Exception as e:
-            logger.error(f"Unexpected error loading custom personas: {e}")
+            logger.error(f"Unexpected error loading custom personas from {abs_path}: {e}")
             return 0
     
     def get_personality_summary(self, user_id: Optional[str] = None) -> str:
