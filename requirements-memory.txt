@@ -1,0 +1,5 @@
+# Optional dependencies for OpenClaw Discord Bot's persistent semantic memory (RAG).
+# Install these if you set EMBEDDING_PROVIDER=local in your bot.env.
+
+numpy>=1.24.0
+sentence-transformers>=2.2.0

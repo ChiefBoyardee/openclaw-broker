@@ -518,6 +518,7 @@ def run_job(command: str, payload: str) -> str:
         if not allowed_set.issuperset(tools_list):
             raise ValueError("llm_task tools must be subset of LLM_ALLOWED_TOOLS")
         repo_context = payload_obj.get("repo_context")
+        conversation_history = payload_obj.get("conversation_history")
         max_steps = payload_obj["max_steps"] if "max_steps" in payload_obj else config.get("max_steps", 6)
         max_steps = int(max_steps)
         if max_steps < 1:
@@ -613,7 +614,7 @@ def run_job(command: str, payload: str) -> str:
             def website_get_stats(_self):
                 return website_get_stats()
         bridge = _Bridge()
-        envelope = run_llm_tool_loop(prompt, tools_list, repo_context, max_steps, config, bridge)
+        envelope = run_llm_tool_loop(prompt, tools_list, repo_context, max_steps, config, bridge, conversation_history)
         return json.dumps(envelope)
 
     return f"unknown command: {command}"

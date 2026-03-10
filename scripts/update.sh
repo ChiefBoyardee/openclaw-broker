@@ -86,6 +86,16 @@ for BOT_DIR in /opt/openclaw-bot-*; do
             sudo -u openclaw "$BOT_DIR/venv/bin/pip" install -r "$BOT_DIR/requirements.txt"
         fi
         
+        # Install memory dependencies if configured
+        if [[ -f "$BOT_DIR/bot.env" ]] && grep -q "EMBEDDING_PROVIDER=" "$BOT_DIR/bot.env" && grep -vq "EMBEDDING_PROVIDER=none" "$BOT_DIR/bot.env"; then
+            echo "  -> Memory features detected in bot.env. Installing memory dependencies..."
+            if [[ $EUID -eq 0 ]]; then
+                runuser -u openclaw -- "$BOT_DIR/venv/bin/pip" install -r "${REPO_ROOT}/requirements-memory.txt"
+            elif [[ $HAS_SUDO -eq 1 ]]; then
+                sudo -u openclaw "$BOT_DIR/venv/bin/pip" install -r "${REPO_ROOT}/requirements-memory.txt"
+            fi
+        fi
+        
         SERVICE="openclaw-discord-bot@${INSTANCE_NAME}"
         if systemctl list-units --full -all | grep -Fq "${SERVICE}.service"; then
             echo "  -> Restarting service $SERVICE..."
