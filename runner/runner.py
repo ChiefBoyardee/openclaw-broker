@@ -749,12 +749,124 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
         if max_steps < 1:
             max_steps = 1
 
+        # Define allowed_set for _Bridge
+        allowed_set = config.get("allowed_tools") or set()
+
+        # Import tools for _Bridge class
+        from runner.browser_tools import (
+            browser_navigate, browser_snapshot, browser_click, browser_type,
+            browser_search, browser_extract_article, browser_close,
+            get_browser_capabilities
+        )
+        from runner.github_tools import (
+            github_create_repo, github_list_repos, github_create_issue, github_list_issues,
+            github_read_file, github_write_file, github_search_repos, github_search_code,
+            github_get_user, get_github_capabilities
+        )
+        from runner.vps_website_tools import (
+            website_init, website_write_file, website_read_file, website_list_files,
+            website_create_post, website_create_knowledge_page, website_update_about,
+            website_get_stats, get_vps_website_capabilities
+        )
+        from runner.nginx_configurator import (
+            nginx_generate_config, nginx_install_config, nginx_enable_site,
+            nginx_disable_site, nginx_remove_config, nginx_test_config,
+            nginx_reload, nginx_get_status, get_nginx_capabilities
+        )
+
+        class _Bridge:
+            allowed_tools = allowed_set
+            worker_id = WORKER_ID
+            def repo_list(_self):
+                return _repo_list()
+            def repo_status(_self, repo: str):
+                return _repo_status(repo)
+            def repo_last_commit(_self, repo: str):
+                return _repo_last_commit(repo)
+            def repo_grep(_self, repo: str, query: str, path: str):
+                return _repo_grep(repo, query, path)
+            def repo_readfile(_self, repo: str, path: str, start: int, end: int):
+                return _repo_readfile(repo, path, start, end)
+            def plan_echo(_self, text: str):
+                return _plan_echo_impl(text)
+            def approve_echo(_self, plan_id: str):
+                return _approve_echo_impl(plan_id)
+            # Browser tools
+            def browser_navigate(_self, url: str, wait_for_load: bool = True):
+                return browser_navigate(url, wait_for_load)
+            def browser_snapshot(_self, full_content: bool = True):
+                return browser_snapshot(full_content)
+            def browser_click(_self, ref: Optional[int] = None, selector: Optional[str] = None):
+                return browser_click(ref, selector)
+            def browser_type(_self, text: str, ref: Optional[int] = None, selector: Optional[str] = None, submit: bool = False):
+                return browser_type(text, ref, selector, submit)
+            def browser_search(_self, query: str, engine: str = "google"):
+                return browser_search(query, engine)
+            def browser_extract_article(_self):
+                return browser_extract_article()
+            def browser_close(_self):
+                return browser_close()
+            # GitHub tools
+            def github_create_repo(_self, name: str, description: str = "", private: bool = False,
+                                  auto_init: bool = True, gitignore_template: str = ""):
+                return github_create_repo(name, description, private, auto_init, gitignore_template)
+            def github_list_repos(_self, type_filter: str = "owner", sort: str = "updated", limit: int = 30):
+                return github_list_repos(type_filter, sort, limit)
+            def github_create_issue(_self, repo: str, title: str, body: str = "", labels: Optional[list] = None):
+                return github_create_issue(repo, title, body, labels)
+            def github_list_issues(_self, repo: str, state: str = "open", limit: int = 10):
+                return github_list_issues(repo, state, limit)
+            def github_read_file(_self, repo: str, path: str, ref: str = "HEAD"):
+                return github_read_file(repo, path, ref)
+            def github_write_file(_self, repo: str, path: str, content: str, message: str = "", branch: str = "HEAD"):
+                return github_write_file(repo, path, content, message, branch)
+            def github_search_repos(_self, query: str, limit: int = 10):
+                return github_search_repos(query, limit)
+            def github_search_code(_self, query: str, limit: int = 10):
+                return github_search_code(query, limit)
+            def github_get_user(_self, username: str):
+                return github_get_user(username)
+            # VPS website tools
+            def website_init(_self, domain: str, title: str, wp_user: str = "admin", wp_pass: str = "", wp_email: str = ""):
+                return website_init(domain, title, wp_user, wp_pass, wp_email)
+            def website_write_file(_self, domain: str, path: str, content: str):
+                return website_write_file(domain, path, content)
+            def website_read_file(_self, domain: str, path: str):
+                return website_read_file(domain, path)
+            def website_list_files(_self, domain: str, path: str = "."):
+                return website_list_files(domain, path)
+            def website_create_post(_self, domain: str, title: str, content: str, status: str = "publish"):
+                return website_create_post(domain, title, content, status)
+            def website_create_knowledge_page(_self, domain: str, title: str, content: str, category: str = ""):
+                return website_create_knowledge_page(domain, title, content, category)
+            def website_update_about(_self, domain: str, content: str):
+                return website_update_about(domain, content)
+            def website_get_stats(_self, domain: str):
+                return website_get_stats(domain)
+            # Nginx configurator tools
+            def nginx_generate_config(_self, domain: str, template: str = "wordpress", **kwargs):
+                return nginx_generate_config(domain, template, **kwargs)
+            def nginx_install_config(_self, domain: str, config_content: str):
+                return nginx_install_config(domain, config_content)
+            def nginx_enable_site(_self, domain: str):
+                return nginx_enable_site(domain)
+            def nginx_disable_site(_self, domain: str):
+                return nginx_disable_site(domain)
+            def nginx_remove_config(_self, domain: str, remove_all: bool = False):
+                return nginx_remove_config(domain, remove_all)
+            def nginx_test_config(_self):
+                return nginx_test_config()
+            def nginx_reload(_self):
+                return nginx_reload()
+            def nginx_get_status(_self):
+                return nginx_get_status()
+
         # Create streaming client
         stream_client = create_stream_client(job_id_for_streaming)
-        
+
         # Build bridge
         bridge = _Bridge()
-        
+
         if not stream_client.enabled:
             logger.warning(f"Streaming not enabled for job {job_id_for_streaming} - ENABLE_STREAMING={os.environ.get('ENABLE_STREAMING', 'not set')}, has_worker_token={bool(os.environ.get('WORKER_TOKEN', ''))}. Falling back to standard mode.")
             
