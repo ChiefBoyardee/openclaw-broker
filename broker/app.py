@@ -198,6 +198,7 @@ def require_worker_token(
     if not WORKER_TOKEN:
         raise HTTPException(500, "WORKER_TOKEN not configured")
     if not x_worker_token or x_worker_token != WORKER_TOKEN:
+        logger.warning(f"Worker token mismatch: received={x_worker_token[:20] if x_worker_token else None}..., expected={WORKER_TOKEN[:20]}...")
         raise HTTPException(401, "bad worker token")
 
 
@@ -207,6 +208,7 @@ def require_bot_token(
     if not BOT_TOKEN:
         raise HTTPException(500, "BOT_TOKEN not configured")
     if not x_bot_token or x_bot_token != BOT_TOKEN:
+        logger.warning(f"Bot token mismatch: received={x_bot_token[:20] if x_bot_token else None}..., expected={BOT_TOKEN[:20]}...")
         raise HTTPException(401, "bad bot token")
 
 
@@ -219,6 +221,10 @@ def require_any_token(
         return
     if x_worker_token and x_worker_token == WORKER_TOKEN:
         return
+    # Log detailed diagnostics for failed auth
+    logger.warning(f"Token auth failed: bot_token_present={bool(x_bot_token)}, worker_token_present={bool(x_worker_token)}, "
+                  f"bot_match={x_bot_token == BOT_TOKEN if x_bot_token else False}, "
+                  f"worker_match={x_worker_token == WORKER_TOKEN if x_worker_token else False}")
     raise HTTPException(401, "bad token")
 
 
