@@ -49,11 +49,13 @@ BOT_COOLDOWN_SECONDS = float(os.environ.get("BOT_COOLDOWN_SECONDS", "3"))
 BOT_MAX_CONCURRENT = int(os.environ.get("BOT_MAX_CONCURRENT", "1"))
 INSTANCE_NAME = os.environ.get("INSTANCE_NAME", "default")
 WHOAMI_BROKER_URL_MODE = os.environ.get("WHOAMI_BROKER_URL_MODE", "full").strip().lower()
+BOT_PRESENCE = os.environ.get("BOT_PRESENCE", "Listening to DMs").strip()
 
 # --- Conversation/Memory Feature Config ---
 MEMORY_ENABLED = os.environ.get("MEMORY_ENABLED", "true").lower() in ("true", "1", "yes")
 MEMORY_DB_PATH = os.environ.get("MEMORY_DB_PATH", "discord_bot_memory.db")
 DEFAULT_PERSONA = os.environ.get("DEFAULT_PERSONA", "helpful_assistant")
+CUSTOM_PERSONAS_PATH = os.environ.get("CUSTOM_PERSONAS_PATH", "custom_personas.json")
 EMBEDDING_PROVIDER = os.environ.get("EMBEDDING_PROVIDER", "none").lower()  # 'openai', 'local', 'none'
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", "text-embedding-3-small")
@@ -253,11 +255,50 @@ intents.dm_messages = True
 client = discord.Client(intents=intents)
 
 
+async def set_bot_presence(
+    text: str = "Listening to DMs",
+    activity_type: str = "listening",
+    status: str = "online",
+) -> None:
+    """
+    Set the bot's Discord presence.
+
+    Args:
+        text: Activity description text.
+        activity_type: One of 'playing', 'listening', 'watching', 'competing', 'custom'.
+        status: One of 'online', 'idle', 'dnd', 'invisible'.
+    """
+    activity_map = {
+        "playing": discord.ActivityType.playing,
+        "listening": discord.ActivityType.listening,
+        "watching": discord.ActivityType.watching,
+        "competing": discord.ActivityType.competing,
+        "custom": discord.ActivityType.custom,
+    }
+    status_map = {
+        "online": discord.Status.online,
+        "idle": discord.Status.idle,
+        "dnd": discord.Status.dnd,
+        "invisible": discord.Status.invisible,
+    }
+    act_type = activity_map.get(activity_type.lower(), discord.ActivityType.listening)
+    disc_status = status_map.get(status.lower(), discord.Status.online)
+    activity = discord.Activity(type=act_type, name=text)
+    await client.change_presence(activity=activity, status=disc_status)
+    logger.info(f"Presence set: {activity_type} '{text}' ({status})")
+
+
 @client.event
 async def on_ready():
     bot_id = str(client.user.id) if client.user else "?"
     logger.info(f"logged in as {client.user} (id={bot_id})")
     logger.info(f"INSTANCE_NAME={INSTANCE_NAME} BROKER_URL={BROKER_URL}")
+    
+    # Set initial presence
+    try:
+        await set_bot_presence(BOT_PRESENCE)
+    except Exception as e:
+        logger.warning(f"Failed to set initial presence: {e}")
     
     # Show conversation features status
     if HAS_CONVERSATION_FEATURES:
@@ -294,44 +335,45 @@ async def _run_job_and_reply(
         return
 
     try:
-        job = create_job(command=command, payload=payload, requires=requires)
-        job_id = job.get("id")
-        if not job_id:
-            await message.reply("Failed to create job (no id).")
-            return
-        state["active_jobs"].add(job_id)
-        state["last_ts"] = now_ts
+        async with message.channel.typing():
+            job = create_job(command=command, payload=payload, requires=requires)
+            job_id = job.get("id")
+            if not job_id:
+                await message.reply("Failed to create job (no id).")
+                return
+            state["active_jobs"].add(job_id)
+            state["last_ts"] = now_ts
 
-        await message.reply(f"{reply_prefix}`{job_id}`. Waiting for result…")
-        result, timed_out = wait_for_job_result(job_id)
-        display = result
-        try:
-            parsed = json.loads(result)
-            if isinstance(parsed, dict) and "ok" in parsed and "command" in parsed:
-                display = _format_repo_envelope(parsed, job_id)
-            elif parse_json:
-                if command == "capabilities":
-                    worker_id = parsed.get("worker_id", "?")
-                    caps = parsed.get("capabilities", [])
-                    display = f"Worker: `{worker_id}`\nCapabilities: {', '.join(caps)}"
-                elif command == "plan_echo":
-                    plan_id = parsed.get("plan_id", "?")
-                    summary = parsed.get("summary", "")
-                    display = f"Plan ID: `{plan_id}`\nSummary: {summary}\nTo apply: `approve {plan_id}`"
-                elif command == "approve_echo":
-                    status = parsed.get("status", "?")
-                    note = parsed.get("note", "")
-                    display = f"Status: {status}\n{note}" if note else f"Status: {status}"
-                elif command == "llm_task":
-                    display = parsed.get("final", result)
-                    if not display and parsed.get("safety"):
-                        display = "(no final answer)" + (
-                            " — max steps reached." if parsed.get("safety", {}).get("max_steps_reached") else ""
-                        )
-        except (json.JSONDecodeError, KeyError, TypeError):
-            pass
-        display = truncate_for_display(redact(display), job_id)
-        await message.reply(display)
+            await message.reply(f"{reply_prefix}`{job_id}`. Waiting for result…")
+            result, timed_out = wait_for_job_result(job_id)
+            display = result
+            try:
+                parsed = json.loads(result)
+                if isinstance(parsed, dict) and "ok" in parsed and "command" in parsed:
+                    display = _format_repo_envelope(parsed, job_id)
+                elif parse_json:
+                    if command == "capabilities":
+                        worker_id = parsed.get("worker_id", "?")
+                        caps = parsed.get("capabilities", [])
+                        display = f"Worker: `{worker_id}`\nCapabilities: {', '.join(caps)}"
+                    elif command == "plan_echo":
+                        plan_id = parsed.get("plan_id", "?")
+                        summary = parsed.get("summary", "")
+                        display = f"Plan ID: `{plan_id}`\nSummary: {summary}\nTo apply: `approve {plan_id}`"
+                    elif command == "approve_echo":
+                        status = parsed.get("status", "?")
+                        note = parsed.get("note", "")
+                        display = f"Status: {status}\n{note}" if note else f"Status: {status}"
+                    elif command == "llm_task":
+                        display = parsed.get("final", result)
+                        if not display and parsed.get("safety"):
+                            display = "(no final answer)" + (
+                                " — max steps reached." if parsed.get("safety", {}).get("max_steps_reached") else ""
+                            )
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+            display = truncate_for_display(redact(display), job_id)
+            await message.reply(display)
     except requests.RequestException as e:
         await message.reply(redact(f"Broker error: {e}"))
     except Exception as e:
@@ -575,23 +617,50 @@ async def on_message(message: discord.Message):
         await message.reply("\n".join(lines))
         return
 
+    if cmd == "presence":
+        if not payload:
+            await message.reply(
+                "Usage: `presence [playing|listening|watching|competing] <text>`\n"
+                "Example: `presence watching the stars`"
+            )
+            return
+        # Parse activity type from first word if it matches a known type
+        presence_parts = payload.strip().split(maxsplit=1)
+        first_word = presence_parts[0].lower()
+        known_types = ("playing", "listening", "watching", "competing")
+        if first_word in known_types and len(presence_parts) > 1:
+            act_type = first_word
+            act_text = presence_parts[1]
+        else:
+            act_type = "playing"
+            act_text = payload.strip()
+        try:
+            await set_bot_presence(act_text, act_type)
+            await message.reply(f"Presence updated: **{act_type}** {act_text}")
+        except Exception as e:
+            await message.reply(f"Failed to update presence: {e}")
+        return
+
     # --- Conversational/Chat Commands ---
     if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
         if cmd == "chat":
             if not payload:
                 await message.reply("Start a conversation! Usage: `chat <your message>`")
                 return
-            response = await handle_chat_command(bot_instance(), message, payload)
+            async with message.channel.typing():
+                response = await handle_chat_command(bot_instance(), message, payload)
             await reply_in_chunks(message, response)
             return
 
         if cmd == "persona":
-            response = await handle_persona_command(bot_instance(), message, payload)
+            async with message.channel.typing():
+                response = await handle_persona_command(bot_instance(), message, payload)
             await reply_in_chunks(message, response)
             return
 
         if cmd == "memory":
-            response = await handle_memory_command(bot_instance(), message, payload)
+            async with message.channel.typing():
+                response = await handle_memory_command(bot_instance(), message, payload)
             await reply_in_chunks(message, response)
             return
 
@@ -599,12 +668,14 @@ async def on_message(message: discord.Message):
             if not payload:
                 await message.reply("What should I remember? Usage: `remember <fact>`")
                 return
-            response = await handle_remember_command(bot_instance(), message, payload)
+            async with message.channel.typing():
+                response = await handle_remember_command(bot_instance(), message, payload)
             await reply_in_chunks(message, response)
             return
 
         if cmd == "history":
-            response = await handle_history_command(bot_instance(), message, payload)
+            async with message.channel.typing():
+                response = await handle_history_command(bot_instance(), message, payload)
             await reply_in_chunks(message, response)
             return
 
@@ -648,6 +719,7 @@ async def on_message(message: discord.Message):
             "",
             "**Info:**",
             "`whoami` - Show bot info",
+            "`presence [type] <text>` - Set bot status (playing/listening/watching/competing)",
         ])
 
         await message.reply("\n".join(help_lines))
@@ -656,8 +728,8 @@ async def on_message(message: discord.Message):
     # Fallback: treat unrecognized text as a natural conversational message
     if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
         try:
-            # Pass the entire original text as the message content
-            response = await handle_chat_command(bot_instance(), message, text)
+            async with message.channel.typing():
+                response = await handle_chat_command(bot_instance(), message, text)
             await reply_in_chunks(message, response)
         except Exception as e:
             logger.exception(f"Error handling natural chat: {e}")
@@ -730,7 +802,12 @@ def _init_conversation_features():
         
         # Initialize memory and personality (used by chat_commands when handling chat)
         get_memory(MEMORY_DB_PATH, embedding_provider)
-        get_personality_engine(DEFAULT_PERSONA)
+        engine = get_personality_engine(DEFAULT_PERSONA)
+
+        # Load custom personas from user config (lives alongside bot.env, survives updates)
+        loaded = engine.load_custom_personas(CUSTOM_PERSONAS_PATH)
+        if loaded:
+            logger.info(f"Loaded {loaded} custom persona(s) from {CUSTOM_PERSONAS_PATH}")
 
         logger.info(f"Conversation features enabled (memory: {MEMORY_DB_PATH}, persona: {DEFAULT_PERSONA})")
         

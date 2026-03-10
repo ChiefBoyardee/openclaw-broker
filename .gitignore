@@ -5,6 +5,10 @@
 !.env.example
 !*.env.example
 
+# User persona config (never commit — copy from custom_personas.json.example)
+custom_personas.json
+!custom_personas.json.example
+
 # Python
 __pycache__/
 *.py[cod]

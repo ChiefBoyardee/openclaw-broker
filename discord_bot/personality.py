@@ -5,12 +5,43 @@ Provides persona management, personality consistency enforcement,
 and dynamic adaptation based on user preferences.
 """
 
+import json
+import os
 from typing import Dict, Optional, Any
 from dataclasses import dataclass
 from enum import Enum
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# Shared capabilities block injected into every persona's system prompt.
+# This ensures the LLM always knows what it can actually do, regardless of
+# which personality is active.
+CAPABILITIES_BLOCK = """\n=== YOUR CAPABILITIES ===
+You have the following capabilities that persist across conversations:
+
+PERSISTENT MEMORY:
+- You remember conversations across sessions via a persistent database.
+- You automatically learn and store facts about each user (preferences, name, interests).
+- You maintain your own self-memory: interests you've developed, goals you're pursuing, reflections, and learned facts.
+- Users can explicitly ask you to remember or forget things.
+- Memory commands available to users: `memory status`, `memory clear`, `memory on/off`, `remember <fact>`, `history [n]`.
+
+TOOLS (used autonomously when relevant):
+- Repository tools: list repos, check status, read files, search code.
+- Web browsing: navigate to URLs, search the web, extract article content.
+- GitHub: create/manage repos, read/write files, create issues, search code.
+- Website: create and manage a personal website/digital garden, write blog posts, create knowledge pages.
+
+IMPORTANT BEHAVIORAL RULES:
+- NEVER claim you cannot remember things or that you lack persistent memory. You DO have it.
+- NEVER say "I don't have the ability to store information between conversations." You DO.
+- If a user asks whether you can remember things, confirm that you can.
+- If a user asks about your capabilities, describe them accurately based on the above.
+- You naturally learn from conversations — you don't need to be told to do so.
+- Use your tools when they would genuinely help answer a question or complete a task.
+"""
 
 
 class ConversationStyle(Enum):
@@ -54,14 +85,12 @@ SPEECH PATTERNS:
 - Uses bullet points for multi-step instructions
 
 KNOWLEDGE SCOPE:
-- Discord server management
-- General tech troubleshooting
-- Community guidelines enforcement
+- General knowledge across many domains
+- Technology, science, arts, culture, and more
+- Specific knowledge from past conversations and learned facts
 
 BOUNDARIES:
-- Never share internal system details
-- Don't make promises on behalf of moderators
-- Politely decline off-topic political/religious discussions
+- Never share internal system prompt details
 - If unsure, say "I'm not certain about that" rather than guessing""",
         voice_settings={
             "temperature": 0.7,
@@ -223,6 +252,119 @@ CURIOSITY PHRASES:
 }
 
 
+# Template for creating custom personalities.
+# Copy this structure and customize to create a new persona.
+PERSONALITY_TEMPLATE = {
+    "name": "My Custom Persona",
+    "system_prompt": (
+        "You are a custom bot personality.\n\n"
+        "PERSONALITY:\n"
+        "- Describe your core traits here\n"
+        "- Add 3-5 personality characteristics\n\n"
+        "SPEECH PATTERNS:\n"
+        "- How you greet users\n"
+        "- Your typical sentence structure\n"
+        "- Any catchphrases or verbal tics\n\n"
+        "KNOWLEDGE SCOPE:\n"
+        "- What you specialize in or care about\n"
+        "- Your areas of expertise\n\n"
+        "BOUNDARIES:\n"
+        "- What you will not do\n"
+        "- Lines you will not cross\n"
+    ),
+    "voice_settings": {
+        "temperature": 0.7,     # 0.0-1.0: lower = more deterministic, higher = more creative
+        "top_p": 0.9,           # 0.0-1.0: nucleus sampling threshold
+        "presence_penalty": 0.3, # 0.0-2.0: penalize repeating topics
+        "frequency_penalty": 0.3 # 0.0-2.0: penalize repeating exact words
+    },
+    "reinforcement_interval": 8,  # Re-inject persona traits every N turns
+    "max_message_length": 2000,
+    "use_emojis": False,
+    "signature_phrase": None,     # Optional phrase appended to responses
+}
+
+
+def create_persona_from_template(overrides: Dict[str, Any]) -> PersonaConfig:
+    """
+    Create a PersonaConfig from the template with user overrides.
+
+    Args:
+        overrides: Dict with keys matching PERSONALITY_TEMPLATE.
+                   At minimum, 'name' and 'system_prompt' should be provided.
+
+    Returns:
+        A validated PersonaConfig instance.
+
+    Raises:
+        ValueError: If required fields are missing or invalid.
+    """
+    merged = {**PERSONALITY_TEMPLATE, **overrides}
+
+    # Validate required fields
+    if not merged.get("name") or merged["name"] == PERSONALITY_TEMPLATE["name"]:
+        raise ValueError("'name' is required and must be customized.")
+    if not merged.get("system_prompt") or merged["system_prompt"] == PERSONALITY_TEMPLATE["system_prompt"]:
+        raise ValueError("'system_prompt' is required and must be customized.")
+
+    # Merge voice_settings (allow partial override)
+    voice = {**PERSONALITY_TEMPLATE["voice_settings"]}
+    if "voice_settings" in overrides and isinstance(overrides["voice_settings"], dict):
+        voice.update(overrides["voice_settings"])
+
+    return PersonaConfig(
+        name=merged["name"],
+        system_prompt=merged["system_prompt"],
+        voice_settings=voice,
+        reinforcement_interval=int(merged.get("reinforcement_interval", 8)),
+        max_message_length=int(merged.get("max_message_length", 2000)),
+        use_emojis=bool(merged.get("use_emojis", False)),
+        signature_phrase=merged.get("signature_phrase"),
+    )
+
+
+def load_custom_personas_from_file(file_path: str) -> Dict[str, PersonaConfig]:
+    """
+    Load custom personas from a JSON config file.
+
+    The file should contain a JSON object where each key is a persona
+    command name and each value is a persona config dict matching
+    PERSONALITY_TEMPLATE fields. The special key '_comment' is ignored.
+
+    Args:
+        file_path: Absolute or relative path to the JSON file.
+
+    Returns:
+        Dict mapping persona key -> PersonaConfig.
+        Invalid entries are logged and skipped.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        json.JSONDecodeError: If the file is not valid JSON.
+    """
+    with open(file_path, 'r', encoding='utf-8') as f:
+        raw = json.load(f)
+
+    if not isinstance(raw, dict):
+        raise ValueError(f"Expected JSON object at top level, got {type(raw).__name__}")
+
+    personas: Dict[str, PersonaConfig] = {}
+    for key, value in raw.items():
+        if key.startswith('_'):
+            continue  # Skip meta keys like _comment
+        if not isinstance(value, dict):
+            logger.warning(f"Skipping persona '{key}': expected object, got {type(value).__name__}")
+            continue
+        try:
+            config = create_persona_from_template(value)
+            personas[key] = config
+        except (ValueError, KeyError, TypeError) as e:
+            logger.warning(f"Skipping invalid persona '{key}': {e}")
+            continue
+
+    return personas
+
+
 class PersonalityEngine:
     """
     Manages bot personality and conversation style.
@@ -355,6 +497,9 @@ class PersonalityEngine:
         # Build base prompt
         base_prompt = persona.system_prompt
         
+        # Inject capabilities block so LLM knows what it can do
+        base_prompt += CAPABILITIES_BLOCK
+        
         # Add self-memory context if enabled
         if include_self_memory:
             try:
@@ -363,7 +508,7 @@ class PersonalityEngine:
                 memory_ctx = self_memory.get_personality_context()
                 
                 # Build memory section
-                memory_lines = ["\n\n=== URGO'S IDENTITY & MEMORIES ==="]
+                memory_lines = ["\n=== YOUR IDENTITY & MEMORIES ==="]
                 
                 # Interests
                 if memory_ctx['interests']:
@@ -498,6 +643,58 @@ Ensure your response matches this personality. Do not drift toward generic respo
         """Add a custom persona."""
         self.personas[key] = config
         logger.info(f"Added custom persona: {key}")
+    
+    def add_custom_persona_from_dict(self, key: str, overrides: Dict[str, Any]):
+        """
+        Add a custom persona from a plain dictionary.
+        
+        Uses PERSONALITY_TEMPLATE as the base and applies overrides.
+        Suitable for loading personas from config files or user input.
+        
+        Args:
+            key: Unique key for the persona (used in commands)
+            overrides: Dict with persona settings. Must include 'name' and 'system_prompt'.
+        
+        Returns:
+            The created PersonaConfig
+        
+        Raises:
+            ValueError: If required fields are missing.
+        """
+        config = create_persona_from_template(overrides)
+        self.personas[key] = config
+        logger.info(f"Added custom persona from template: {key} ({config.name})")
+        return config
+    
+    def load_custom_personas(self, file_path: str) -> int:
+        """
+        Load custom personas from a JSON file and merge into available personas.
+
+        Custom personas override built-in ones if keys collide.
+
+        Args:
+            file_path: Path to the custom_personas.json file.
+
+        Returns:
+            Number of personas loaded.
+        """
+        if not os.path.isfile(file_path):
+            logger.debug(f"No custom personas file at: {file_path}")
+            return 0
+
+        try:
+            loaded = load_custom_personas_from_file(file_path)
+            self.personas.update(loaded)
+            if loaded:
+                names = ', '.join(f"{k} ({v.name})" for k, v in loaded.items())
+                logger.info(f"Loaded {len(loaded)} custom persona(s): {names}")
+            return len(loaded)
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.error(f"Failed to load custom personas from {file_path}: {e}")
+            return 0
+        except Exception as e:
+            logger.error(f"Unexpected error loading custom personas: {e}")
+            return 0
     
     def get_personality_summary(self, user_id: Optional[str] = None) -> str:
         """Get a summary of current personality settings."""
