@@ -690,18 +690,9 @@ class ChatManager:
             logger.warning(f"No system message in conversation! Persona: {session.persona_key}")
 
         # Build the payload for llm_task
-        # Include website tools explicitly so Urgo can use them
-        website_tools = [
-            "website_init",
-            "website_write_file",
-            "website_read_file",
-            "website_list_files",
-            "website_create_post",
-            "website_create_knowledge_page",
-            "website_update_about",
-            "website_get_stats",
-        ]
-
+        # Don't explicitly request tools - let the runner use its configured LLM_ALLOWED_TOOLS
+        # This avoids "tools must be subset of LLM_ALLOWED_TOOLS" errors when the runner
+        # hasn't been configured with website tools in its environment
         payload_obj = {
             "prompt": current_prompt,
             "conversation_history": [
@@ -711,7 +702,7 @@ class ChatManager:
             "persona": session.persona_key,
             "temperature": voice_settings.get("temperature", 0.7),
             "max_tokens": voice_settings.get("max_tokens", 2000),
-            "tools": website_tools,
+            # Note: omitting "tools" - runner will use its configured allowed_tools
         }
 
         payload_json = json.dumps(payload_obj)
