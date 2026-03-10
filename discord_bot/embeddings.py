@@ -419,7 +419,7 @@ class RemoteEmbeddingProvider(EmbeddingProvider):
 
     @property
     def name(self) -> str:
-        return f"remote-{self.model.replace('/', '-')}
+        return f"remote-{self.model.replace('/', '-')}"
 
 
 def create_embedding_provider(
