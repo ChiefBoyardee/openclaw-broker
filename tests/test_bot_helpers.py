@@ -10,6 +10,8 @@ from discord_bot.bot import (
     _format_repo_envelope,
     is_allowed,
     redact,
+    _normalize_allowlist_id,
+    _parse_allowlist_ids,
     MAX_DISPLAY_LEN,
 )
 
@@ -124,6 +126,31 @@ def test_format_repo_envelope_truncated_note():
 class _DMChannelPlaceholder:
     """Minimal placeholder so we can patch discord.DMChannel for isinstance checks."""
     pass
+
+
+# --- allowlist parsing ---
+
+
+def test_normalize_allowlist_id_strips_whitespace():
+    assert _normalize_allowlist_id("  1467066682945310922  ") == "1467066682945310922"
+
+
+def test_normalize_allowlist_id_strips_quotes():
+    assert _normalize_allowlist_id('"1467066682945310922"') == "1467066682945310922"
+    assert _normalize_allowlist_id("'1467066682945310922'") == "1467066682945310922"
+
+
+def test_normalize_allowlist_id_strips_crlf():
+    assert _normalize_allowlist_id("1467066682945310922\r\n") == "1467066682945310922"
+    assert _normalize_allowlist_id("1467066682945310922\r") == "1467066682945310922"
+
+
+def test_parse_allowlist_ids_normalizes_and_deduplicates():
+    with patch("discord_bot.bot.ALLOWED_USER_ID", ' "1467066682945310922" '), patch(
+        "discord_bot.bot.ALLOWLIST_USER_ID", " 1467066682945310922 , 999 "
+    ):
+        ids = _parse_allowlist_ids()
+    assert ids == {"1467066682945310922", "999"}
 
 
 def test_is_allowed_dm_author_in_allowlist():

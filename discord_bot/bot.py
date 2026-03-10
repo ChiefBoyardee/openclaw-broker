@@ -66,13 +66,25 @@ BROKER_CONNECT_TIMEOUT = 5
 BROKER_READ_TIMEOUT = 15
 
 # Allowlist: union of ALLOWED_USER_ID (single) and ALLOWLIST_USER_ID (comma/space separated)
+def _normalize_allowlist_id(raw: str) -> str:
+    """Strip whitespace (including CRLF) and surrounding quotes so env values match Discord IDs."""
+    s = raw.strip().strip("\r\n")
+    if len(s) >= 2 and (s[0] == s[-1] == '"' or s[0] == s[-1] == "'"):
+        s = s[1:-1].strip()
+    return s
+
+
 def _parse_allowlist_ids() -> set[str]:
     ids: set[str] = set()
     if ALLOWED_USER_ID:
-        ids.add(ALLOWED_USER_ID)
+        n = _normalize_allowlist_id(ALLOWED_USER_ID)
+        if n:
+            ids.add(n)
     for part in re.split(r"[\s,]+", ALLOWLIST_USER_ID):
         if part:
-            ids.add(part)
+            n = _normalize_allowlist_id(part)
+            if n:
+                ids.add(n)
     return ids
 
 
@@ -682,6 +694,11 @@ def main():
     if not ALLOWLIST_IDS:
         print("[bot] ERROR: At least one of ALLOWED_USER_ID or ALLOWLIST_USER_ID must be set", file=sys.stderr)
         sys.exit(1)
+
+    print(f"[bot] Allowlist: {len(ALLOWLIST_IDS)} user ID(s) configured", file=sys.stderr)
+    if os.environ.get("ALLOWLIST_DEBUG", "").strip().lower() in ("1", "true", "yes"):
+        for aid in sorted(ALLOWLIST_IDS):
+            print(f"[bot] ALLOWLIST_IDS entry: {repr(aid)} (len={len(aid)})", file=sys.stderr)
     
     # Initialize conversation features
     _init_conversation_features()
