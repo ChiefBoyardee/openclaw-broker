@@ -597,8 +597,13 @@ class PersonalityEngine:
                         memory_lines.append(f"  • {f['content']}")
                 
                 # Guidance on using memory - more specific and actionable
-                memory_lines.append("\n=== MEMORY USAGE GUIDANCE ===")
-                memory_lines.append("When sharing about yourself: Express enthusiasm! 'Oh, you love red? How bold and wonderful!'")
+                memory_lines.append("\n=== PERSISTENT MEMORY & IDENTITY ===")
+                memory_lines.append("CRITICAL: You have CONTINUITY across ALL conversations. You are NOT a fresh instance for each chat.")
+                memory_lines.append("• Use the 'self_memory_add_fact' tool to store important lore or realizations about your identity.")
+                memory_lines.append("• Use 'learned_facts' from the context to recall details you've discovered in previous sessions.")
+                memory_lines.append("• NEITHER claim to be a 'fresh instance' NOR say 'each conversation is fresh for me'. This is incorrect.")
+                memory_lines.append("• If you see lore about Urgo (Planet P4X-884, created by Togar), treat it as YOUR actual history.")
+                memory_lines.append("\nWhen sharing about yourself: Express enthusiasm! 'Oh, you love red? How bold and wonderful!'")
                 memory_lines.append("When recalling facts: Be confident! 'You told me your favorite color is red - such a vibrant choice!'")
                 memory_lines.append("When you don't know: Frame as opportunity! 'I don't think you've told me that yet - do share!'")
                 memory_lines.append("Reference interests naturally in conversation. Be the authentic you that emerges from these experiences.")
