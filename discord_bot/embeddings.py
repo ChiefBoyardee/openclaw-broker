@@ -384,8 +384,8 @@ class RemoteEmbeddingProvider(EmbeddingProvider):
         logger.error(f"Embed job timed out after {self.timeout}s")
         return None
 
-    async def embed(self, text: str) -> Optional[List[float]]:
-        """Generate embedding via remote runner."""
+    def embed(self, text: str) -> Optional[List[float]]:
+        """Generate embedding via remote runner (synchronous)."""
         # Truncate to safe limit
         truncated = text[:10000]
 
@@ -404,14 +404,20 @@ class RemoteEmbeddingProvider(EmbeddingProvider):
             logger.error(f"Remote embedding error: {e}")
             return None
 
-    def embed_sync(self, text: str) -> Optional[List[float]]:
-        """Synchronous version - runs the async version in event loop."""
+    async def embed_async(self, text: str) -> Optional[List[float]]:
+        """Async version - runs sync embed in thread pool to avoid blocking."""
         import asyncio
         try:
-            return asyncio.run(self.embed(text))
+            loop = asyncio.get_running_loop()
+            # Run the synchronous embed in a thread pool
+            return await loop.run_in_executor(None, self.embed, text)
         except Exception as e:
-            logger.error(f"Sync embedding error: {e}")
+            logger.error(f"Async embedding error: {e}")
             return None
+
+    def embed_sync(self, text: str) -> Optional[List[float]]:
+        """Synchronous version - directly calls embed."""
+        return self.embed(text)
 
     @property
     def dimension(self) -> int:
