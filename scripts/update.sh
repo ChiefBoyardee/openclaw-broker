@@ -36,6 +36,14 @@ if [[ -d "${REPO_ROOT}/.venv-broker" ]]; then
     if systemctl list-units --full -all | grep -Fq "openclaw-broker.service"; then
         echo "Restarting openclaw-broker service..."
         run_sudo systemctl restart openclaw-broker
+        sleep 2
+        # Verify restart succeeded
+        if systemctl is-active --quiet openclaw-broker; then
+            echo "Broker restarted successfully."
+        else
+            echo "ERROR: Broker restart failed! Check logs: sudo journalctl -u openclaw-broker -n 20"
+            exit 1
+        fi
     fi
 else
     echo "No local broker detected (.venv-broker missing)."
@@ -63,7 +71,13 @@ if [[ -d "${REPO_ROOT}/.venv-runner" ]]; then
         echo "Restarting openclaw-runner service to re-initialize LLM state..."
         run_sudo systemctl restart openclaw-runner
         # Wait a moment for runner to reconnect and load embedding model
-        sleep 2
+        sleep 3
+        # Verify restart succeeded
+        if systemctl is-active --quiet openclaw-runner; then
+            echo "Runner restarted successfully."
+        else
+            echo "WARNING: Runner restart may have failed. Check logs: sudo journalctl -u openclaw-runner -n 20"
+        fi
         echo "Runner restarted. Embedding model will be lazy-loaded on first use."
     else
         echo "Note: openclaw-runner systemd service not found. If you run the runner manually via terminal, please restart it to apply updates."
@@ -121,6 +135,13 @@ for BOT_DIR in /opt/openclaw-bot-*; do
         if systemctl list-units --full -all | grep -Fq "${SERVICE}.service"; then
             echo "  -> Restarting service $SERVICE..."
             run_sudo systemctl restart "$SERVICE"
+            sleep 2
+            # Verify restart succeeded
+            if systemctl is-active --quiet "$SERVICE"; then
+                echo "  -> Bot $INSTANCE_NAME restarted successfully."
+            else
+                echo "  -> WARNING: Bot $INSTANCE_NAME restart may have failed. Check logs: sudo journalctl -u $SERVICE -n 20"
+            fi
         fi
     fi
 done
