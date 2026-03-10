@@ -1147,13 +1147,27 @@ async def handle_agentic_command(message: discord.Message, prompt: str):
         # Create agentic session
         manager = get_agentic_manager()
 
-        # Get memory for conversation context
+        conversation_id = None
         memory = None
         if MEMORY_ENABLED:
             from .memory import get_memory
             memory = get_memory()
+            if memory:
+                # Use the ACTIVE conversation so we maintain context across messages
+                conversation_id = memory.get_active_conversation(str(message.author.id))
 
-        conversation_id = f"{message.channel.id}_{message.author.id}_{int(time.time())}"
+        # Only create a new ID if no active conversation exists
+        if not conversation_id:
+            conversation_id = f"{message.channel.id}_{message.author.id}_{int(time.time())}"
+            if memory:
+                memory.create_conversation(
+                    conversation_id=conversation_id,
+                    channel_id=str(message.channel.id),
+                    user_id=str(message.author.id),
+                    title=f"Conversation {int(time.time()) % 10000}",
+                    is_group=False
+                )
+                memory.set_active_conversation(str(message.author.id), conversation_id, str(message.channel.id))
 
         # Build conversation history from memory
         conversation_history = []
