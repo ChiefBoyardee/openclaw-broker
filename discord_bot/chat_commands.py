@@ -992,7 +992,13 @@ To customize, edit `custom_website_config.json` and run `!website regenerate`"""
                     color_name = color_parts[0]
                     color_value = color_parts[1]
                     
-                    return f"🎨 **Theme customization**\n\nTo change the {color_name} color to {color_value}:\n\n1. Edit `custom_website_config.json`\n2. Find `theme.{color_name}_color` and change it to `"{color_value}"`\n3. Run `!website regenerate`"
+                    return (
+                        f"🎨 **Theme customization**\n\n"
+                        f"To change the {color_name} color to {color_value}:\n\n"
+                        f"1. Edit `custom_website_config.json`\n"
+                        f"2. Find `theme.{color_name}_color` and change it to `{color_value}`\n"
+                        f"3. Run `!website regenerate`"
+                    )
                 else:
                     return "🎨 **Customization help**\n\nTo customize your website:\n\n1. Edit `custom_website_config.json`\n2. Modify colors, sections, or content\n3. Run `!website regenerate`\n\n**Quick color commands:**\n• `!website customize primary #5b8c85`\n• `!website customize accent #e74c3c`"
         
