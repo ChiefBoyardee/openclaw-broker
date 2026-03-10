@@ -48,9 +48,14 @@ if [[ -d "${REPO_ROOT}/.venv-runner" ]]; then
     "${REPO_ROOT}/.venv-runner/bin/pip" install -r requirements.txt
     
     if [[ -f "${REPO_ROOT}/requirements-runner-enhanced.txt" ]]; then
-        echo "Installing enhanced runner dependencies (Playwright for Browser Tools)..."
+        echo "Installing enhanced runner dependencies (Playwright + Embedding support)..."
         "${REPO_ROOT}/.venv-runner/bin/pip" install -r requirements-runner-enhanced.txt
         "${REPO_ROOT}/.venv-runner/bin/playwright" install chromium
+    fi
+    
+    # Check if runner has embedding capability configured
+    if [[ -f "${REPO_ROOT}/runner.env" ]] && grep -q "EMBEDDING_MODEL=" "${REPO_ROOT}/runner.env"; then
+        echo "Note: Runner embedding model configured. Ensure sentence-transformers is installed (included in enhanced deps)."
     fi
     
     # Restart runner service if using systemd

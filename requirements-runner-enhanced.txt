@@ -10,9 +10,11 @@ requests>=2.31.0
 # Note: GitHub tools use only standard library (urllib)
 # Note: VPS website tools use only standard library
 
-# Optional: For better async support
-# asyncio is part of standard library in Python 3.7+
+# Embedding support for remote embedding jobs from Discord Bot
+# The runner loads models like Qwen/Qwen3-Embedding-0.6B to process embed commands
+sentence-transformers>=2.2.0
+numpy>=1.24.0
 
-# Optional: For embedding support (if using local embeddings)
-# sentence-transformers>=2.2.0
-# numpy>=1.24.0
+# PyTorch with CUDA support (install appropriate version for your system)
+# For CUDA 12.1: pip install torch --index-url https://download.pytorch.org/whl/cu121
+# For CPU only: pip install torch --index-url https://download.pytorch.org/whl/cpu
