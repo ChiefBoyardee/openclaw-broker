@@ -169,6 +169,7 @@ class BrokerStreamingClient:
         warning_interval = 10  # Warn every 10 seconds if no chunks received
         last_warning_time = start_time
 
+        not_found_attempts = 0
         while True:
             try:
                 params: Dict[str, Any] = {"after_id": last_id, "limit": 50}
@@ -205,8 +206,15 @@ class BrokerStreamingClient:
                                     return
 
                         elif response.status == 404:
-                            logger.error(f"Job {job_id} not found")
-                            return
+                            # Job might not be visible yet due to WAL mode - retry a few times
+                            if not_found_attempts < 3:
+                                not_found_attempts += 1
+                                logger.warning(f"Job {job_id} not found (attempt {not_found_attempts}/3), retrying...")
+                                await asyncio.sleep(0.1 * not_found_attempts)  # 100ms, 200ms, 300ms
+                                continue  # Try again
+                            else:
+                                logger.error(f"Job {job_id} not found after 3 attempts")
+                                return
 
                 # Check timeout
                 elapsed = asyncio.get_event_loop().time() - start_time
