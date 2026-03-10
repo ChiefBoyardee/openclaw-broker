@@ -133,32 +133,42 @@ Chunks can be of the following types:
 
 ## Usage
 
-### Manual Agentic Mode
+### Agentic Mode is the Default
 
-Users can explicitly request agentic mode:
+**Agentic mode is now the primary response mode for almost all requests.** The bot automatically uses streaming, multi-turn tool execution for:
 
+- Web research (visiting websites, searching)
+- Repository operations (search, read files, explore)
+- GitHub operations
+- System queries
+- General questions (the LLM decides what tools to use)
+
+Simply ask naturally:
 ```
-!agentic Search for authentication code in the discord_bot folder,
- then look up any security best practices on the web,
- and finally create a summary of your findings
+"Can you visit https://en.wikipedia.org/wiki/Duckport_Canal and tell me something interesting?"
+"Search my repos for authentication code"
+"Look up Python best practices on the web"
 ```
 
 The bot will:
 1. Stream progress updates
 2. Show thinking steps with 🤔 reactions
-3. Call repo tools (grep, readfile) as needed
-4. Call browser tools (search, navigate) as needed
-5. Send intermediate messages
-6. Deliver final result with ✅ reaction
+3. Call tools as needed (browser, repo, GitHub, etc.)
+4. Send intermediate messages
+5. Deliver final result with ✅ reaction
 
-### Auto-Trigger Agentic Mode
+### Manual Simple Chat
 
-When `AGENTIC_AUTO_TRIGGER=true`, high-confidence tool intents automatically use agentic mode:
+For quick conversational responses without tool usage, the bot automatically detects simple chat intents and responds quickly.
+
+### Force Agentic Mode
+
+If you want to explicitly use agentic mode (or see the status message):
 
 ```
-User: "Search for the auth code in my repos, then look up OAuth2 best practices"
-→ Bot detects high-confidence tool intent
-→ Automatically uses agentic mode for multi-turn execution
+!agentic Search for authentication code in the discord_bot folder,
+ then look up any security best practices on the web,
+ and finally create a summary of your findings
 ```
 
 ### Discord-Native Tools

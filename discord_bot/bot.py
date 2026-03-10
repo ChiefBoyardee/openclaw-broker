@@ -623,10 +623,25 @@ async def on_message(message: discord.Message):
             await message.reply("Please provide a prompt after the routing prefix.")
             return
 
-        # Route through conversational handler with context support
-        if HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
+        # Route through agentic mode by default for full tool autonomy
+        if HAS_AGENTIC_MODE and AGENTIC_MODE:
             try:
-                # Detect intent for tool awareness
+                logger.info(f"Using AGENTIC MODE for ask/urgo command - full tool autonomy")
+                await handle_agentic_command(message, prompt_text)
+            except Exception as e:
+                logger.exception(f"Error in agentic ask/urgo: {e}")
+                # Fall back to traditional job-based approach on error
+                await _run_job_and_reply(
+                    message,
+                    "llm_task",
+                    json.dumps({"prompt": prompt_text}),
+                    reply_prefix="LLM job: ",
+                    parse_json=True,
+                    requires=requires,
+                )
+        elif HAS_CONVERSATION_FEATURES and MEMORY_ENABLED:
+            try:
+                # Fallback to conversational handler if agentic not available
                 intent_result = None
                 if HAS_NL_ROUTER:
                     intent_result = detect_intent(prompt_text)
@@ -853,82 +868,50 @@ async def on_message(message: discord.Message):
             logger.info(f"Natural language intent detected: {intent_result.intent} "
                        f"(confidence: {intent_result.confidence:.2f}) for user {message.author.id}")
             
-            # Route based on detected intent
-            if intent_result.intent == "casual_chat" or intent_result.confidence < 0.4:
-                # Low confidence or casual chat - use standard conversational handler
-                async with message.channel.typing():
-                    response = await handle_chat_command(
-                        bot_instance(), message, text,
-                        intent_result=intent_result  # Pass intent for context
-                    )
-                await reply_in_chunks(message, response)
-                
-            elif intent_result.intent == "memory_ops":
-                # Memory management commands
-                await _handle_natural_memory_command(message, intent_result, text)
-                
-            elif intent_result.intent == "conversations_manage":
-                # Conversation management
-                await _handle_natural_conversations_command(message, intent_result, text)
-                
-            elif intent_result.intent == "persona_switch":
-                # Persona switching
-                await _handle_natural_persona_command(message, intent_result, text)
-                
-            elif intent_result.intent in ("repo_explore", "repo_search", "file_read"):
-                # Repository operations with tool awareness
-                # Use agentic mode if auto-trigger is enabled and confidence is high
-                logger.info(f"Repo intent detected: {intent_result.intent}. AGENTIC_MODE={AGENTIC_MODE}, "
-                           f"AUTO_TRIGGER={AGENTIC_AUTO_TRIGGER}, confidence={intent_result.confidence:.2f}")
-                if HAS_AGENTIC_MODE and AGENTIC_MODE and AGENTIC_AUTO_TRIGGER and intent_result.confidence > 0.6:
-                    logger.info(f"Auto-triggering agentic mode for {intent_result.intent} (confidence: {intent_result.confidence:.2f})")
-                    await handle_agentic_command(message, text)
-                else:
-                    logger.info(f"Using standard chat handler for {intent_result.intent}")
-                    async with message.channel.typing():
-                        response = await handle_chat_command(
-                            bot_instance(), message, text,
-                            intent_result=intent_result,
-                            enable_tools=True
-                        )
-                    await reply_in_chunks(message, response)
-
-            elif intent_result.intent == "github_ops":
-                # GitHub operations
-                await _handle_natural_github_command(message, intent_result, text)
-                
-            elif intent_result.intent == "web_research":
-                # Web research with browser tools
-                # Use agentic mode for web research if auto-trigger is enabled
-                logger.info(f"Web research intent detected. AGENTIC_MODE={AGENTIC_MODE}, AUTO_TRIGGER={AGENTIC_AUTO_TRIGGER}, "
-                           f"HAS_AGENTIC={HAS_AGENTIC_MODE}, confidence={intent_result.confidence:.2f}")
-                if HAS_AGENTIC_MODE and AGENTIC_MODE and AGENTIC_AUTO_TRIGGER and intent_result.confidence > 0.5:
-                    logger.info(f"Auto-triggering agentic mode for web_research (confidence: {intent_result.confidence:.2f})")
-                    await handle_agentic_command(message, text)
-                else:
-                    logger.info(f"Using standard chat handler for web_research (confidence: {intent_result.confidence:.2f})")
-                    async with message.channel.typing():
-                        response = await handle_chat_command(
-                            bot_instance(), message, text,
-                            intent_result=intent_result,
-                            enable_tools=True
-                        )
-                    await reply_in_chunks(message, response)
-                
-            elif intent_result.intent == "website_manage":
-                # Website management
-                await _handle_natural_website_command(message, intent_result, text)
-                
-            elif intent_result.intent == "system_status":
-                # System/capabilities queries
-                await _handle_natural_system_command(message, intent_result, text)
-                
-            else:
-                # Unknown intent - fall back to chat
+            # AGENTIC-FIRST ROUTING: Use agentic mode for almost everything
+            # This gives the LLM full autonomy to use tools and multi-turn reasoning
+            
+            logger.info(f"Intent detected: {intent_result.intent} (confidence: {intent_result.confidence:.2f}). "
+                       f"HAS_AGENTIC={HAS_AGENTIC_MODE}, AGENTIC_MODE={AGENTIC_MODE}")
+            
+            # Only use simple chat for clear conversational intents with high confidence
+            # Everything else gets the full agentic treatment with tool autonomy
+            if intent_result.intent == "casual_chat" and intent_result.confidence > 0.7:
+                # Clear conversational query - quick simple response
+                logger.info(f"Simple chat for clear casual_chat (confidence: {intent_result.confidence:.2f})")
                 async with message.channel.typing():
                     response = await handle_chat_command(
                         bot_instance(), message, text,
                         intent_result=intent_result
+                    )
+                await reply_in_chunks(message, response)
+                
+            elif intent_result.intent == "memory_ops":
+                # Memory commands - use specialized handler for consistency
+                await _handle_natural_memory_command(message, intent_result, text)
+                
+            elif intent_result.intent == "conversations_manage":
+                # Conversation management - specialized handler
+                await _handle_natural_conversations_command(message, intent_result, text)
+                
+            elif intent_result.intent == "persona_switch":
+                # Persona switch - specialized handler
+                await _handle_natural_persona_command(message, intent_result, text)
+                
+            elif HAS_AGENTIC_MODE and AGENTIC_MODE:
+                # DEFAULT: Agentic mode for everything else
+                # Web research, repo operations, GitHub, website, system, unknown - all agentic
+                logger.info(f"AGENTIC MODE for '{intent_result.intent}' - giving LLM full tool autonomy")
+                await handle_agentic_command(message, text)
+                
+            else:
+                # Fallback if agentic not available
+                logger.warning(f"Agentic unavailable, using standard chat for '{intent_result.intent}'")
+                async with message.channel.typing():
+                    response = await handle_chat_command(
+                        bot_instance(), message, text,
+                        intent_result=intent_result,
+                        enable_tools=True
                     )
                 await reply_in_chunks(message, response)
                 
