@@ -176,7 +176,9 @@ if [[ "$BUILD_FROM_SOURCE" == true ]]; then
   else
     echo "[setup_llama_cpp] Cloning llama-cpp-python repository..."
     rm -rf "$SOURCE_DIR/llama-cpp-python"
-    git clone --recursive https://github.com/abetlen/llama-cpp-python.git "$SOURCE_DIR/llama-cpp-python"
+    # Use JamePeng fork for API compatibility with latest llama.cpp
+    # The abetlen repo has outdated bindings causing "undefined symbol: llama_get_kv_self" errors
+    git clone --recursive https://github.com/JamePeng/llama-cpp-python.git "$SOURCE_DIR/llama-cpp-python"
     cd "$SOURCE_DIR/llama-cpp-python"
     # Update to latest llama.cpp (this gets qwen35 support)
     git submodule update --remote vendor/llama.cpp
