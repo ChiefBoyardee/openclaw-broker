@@ -30,6 +30,12 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Self-healing: ensure scripts are executable (git may reset permissions)
+if [[ ! -x "$SCRIPT_DIR/switch_model.py" ]]; then
+    chmod +x "$SCRIPT_DIR/switch_model.py" 2>/dev/null || true
+fi
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'

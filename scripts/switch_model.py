@@ -206,11 +206,27 @@ def prompt_for_selection(files: list[dict]) -> dict:
 
 
 def find_server_env() -> Optional[Path]:
-    """Find the server.env file in common locations."""
-    paths = [
-        Path.home() / ".local" / "llama-cpp-server" / "server.env",
-        Path("/opt/llama-cpp-server/server.env"),
-    ]
+    """Find the server.env file in common locations.
+    
+    Prefer system install if systemd service exists, otherwise use user install.
+    """
+    # Check if systemd service exists (indicates system install)
+    systemd_service = Path("/etc/systemd/system/llama-cpp-server.service")
+    
+    paths = []
+    if systemd_service.exists():
+        # Systemd exists - prefer system install paths first
+        paths = [
+            Path("/opt/llama-cpp-server/server.env"),
+            Path.home() / ".local" / "llama-cpp-server" / "server.env",
+        ]
+    else:
+        # No systemd - prefer user install
+        paths = [
+            Path.home() / ".local" / "llama-cpp-server" / "server.env",
+            Path("/opt/llama-cpp-server/server.env"),
+        ]
+    
     for path in paths:
         if path.exists():
             return path
