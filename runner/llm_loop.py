@@ -7,6 +7,8 @@ import json
 import re
 import sys
 import logging
+import threading
+import time
 from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -436,21 +438,41 @@ def run_llm_tool_loop_streaming(
             # Post a small intermediate status so user knows we pre-fetched
             # stream_client.post_message("I've pre-fetched those URLs for you. Analyzing...", "info")
 
+    def _heartbeat_worker():
+        """Background thread to send heartbeats during long LLM calls."""
+        while not stop_heartbeat.is_set():
+            if stream_client:
+                stream_client.post_heartbeat()
+            time.sleep(25)  # Send heartbeat every 25 seconds (under 30s timeout)
+
     while step < max_steps:
         step += 1
 
         if stream_client:
             stream_client.post_heartbeat()
 
-        response = chat_with_tools(
-            messages,
-            tools_schema,
-            base_url=config.get("base_url", ""),
-            api_key=config.get("api_key", ""),
-            model=config.get("model", ""),
-            temperature=config.get("temperature", 0.2),
-            max_tokens=config.get("max_tokens", 4096),
-        )
+        # Start heartbeat thread for long LLM calls
+        stop_heartbeat = threading.Event()
+        heartbeat_thread = None
+        if stream_client:
+            heartbeat_thread = threading.Thread(target=_heartbeat_worker, daemon=True)
+            heartbeat_thread.start()
+
+        try:
+            response = chat_with_tools(
+                messages,
+                tools_schema,
+                base_url=config.get("base_url", ""),
+                api_key=config.get("api_key", ""),
+                model=config.get("model", ""),
+                temperature=config.get("temperature", 0.2),
+                max_tokens=config.get("max_tokens", 4096),
+            )
+        finally:
+            # Stop heartbeat thread after LLM call completes
+            if heartbeat_thread:
+                stop_heartbeat.set()
+                heartbeat_thread.join(timeout=1)
 
         content = response.get("content")
         tc_list = response.get("tool_calls")
