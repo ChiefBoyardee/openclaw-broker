@@ -405,8 +405,11 @@ def restart_llama_server(server_env_path: Path, dry_run: bool = False) -> bool:
         print(color("Restarting llama-cpp-server service...", Colors.CYAN))
         import subprocess
         try:
+            # Check if running as root - skip sudo if so
+            is_root = os.geteuid() == 0
+            cmd = ["systemctl", "restart", "llama-cpp-server"] if is_root else ["sudo", "systemctl", "restart", "llama-cpp-server"]
             result = subprocess.run(
-                ["sudo", "systemctl", "restart", "llama-cpp-server"],
+                cmd,
                 capture_output=True,
                 text=True,
                 timeout=30
