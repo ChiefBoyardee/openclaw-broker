@@ -526,8 +526,9 @@ def run_llm_tool_loop_streaming(
 
         if stream_client:
             stream_client.post_heartbeat()
-            # Post a small intermediate status so user knows we pre-fetched
-            # stream_client.post_message("I've pre-fetched those URLs for you. Analyzing...", "info")
+
+    # Track cumulative tokens across all LLM calls
+    tokens_generated = 0
 
     def _heartbeat_worker():
         """Background thread to send heartbeats during long LLM calls."""
@@ -549,7 +550,7 @@ def run_llm_tool_loop_streaming(
             stream_client.post_heartbeat()
             # Post a thinking/progress message so user knows we're working
             if step == 1:
-                stream_client.post_thinking("Analyzing request and preparing to generate response...", step=1)
+                stream_client.post_thinking("Analyzing request and preparing to generate response...", step=step, tokens=tokens_generated)
 
         # Start heartbeat thread for long LLM calls
         stop_heartbeat = threading.Event()
@@ -577,6 +578,12 @@ def run_llm_tool_loop_streaming(
         content = response.get("content")
         tc_list = response.get("tool_calls")
         fallback_parsed = response.get("fallback_parsed", False)
+        tokens_used = response.get("tokens", 0)
+
+        # Track cumulative tokens
+        if tokens_used > 0:
+            # Approximate tracking since we don't have prompt tokens separately
+            tokens_generated += tokens_used
 
         if content and not tc_list:
             # Final answer received
@@ -744,7 +751,7 @@ def run_llm_tool_loop_streaming(
     # Post final chunk (strip any residual <think> blocks)
     if stream_client:
         final_text = _strip_think_blocks(final_text)
-        stream_client.post_final(final_text)
+        stream_client.post_final(final_text, tokens=tokens_generated)
 
     return {
         "final": final_text,

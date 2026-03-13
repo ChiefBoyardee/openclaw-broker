@@ -222,6 +222,10 @@ def chat_with_tools(
             logger.info(f"Native tool_call: {tc.function.name if tc.function else '?'}("
                        f"{tc.function.arguments[:100] if tc.function else '?'})")
 
+    # Extract token usage if available
+    token_usage = getattr(response, "usage", None)
+    total_tokens = token_usage.total_tokens if token_usage else 0
+
     # Check for native tool_calls first (works with chatml-function-calling / --jinja)
     if native_tool_calls:
         clean_content = _strip_think_blocks(raw_content) if raw_content else None
@@ -235,6 +239,7 @@ def chat_with_tools(
                 }
                 for tc in native_tool_calls
             ],
+            "tokens": total_tokens,
         }
 
     # Fallback: parse tool calls from raw content
@@ -246,12 +251,14 @@ def chat_with_tools(
                 "content": remaining_content,
                 "tool_calls": extracted_calls,
                 "fallback_parsed": True,
+                "tokens": total_tokens,
             }
         # No tool calls found — final answer, strip <think> blocks
         clean_content = _strip_think_blocks(raw_content)
         return {
             "content": clean_content if clean_content else None,
             "tool_calls": None,
+            "tokens": total_tokens,
         }
 
-    return {"content": raw_content, "tool_calls": None}
+    return {"content": raw_content, "tool_calls": None, "tokens": total_tokens}

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Set
@@ -84,6 +85,15 @@ class AgenticSession:
         self.thinking_steps: List[str] = []
         self.followup_job_ids: List[str] = []  # Track follow-up jobs created
 
+        # Status tracking for real-time updates
+        self.status_message: Optional[discord.Message] = None  # Initial status message to edit
+        self.current_step: int = 0
+        self.total_steps: int = config.max_steps
+        self.tokens_generated: int = 0
+        self.start_time: float = 0.0
+        self.last_status_update: float = 0.0
+        self.gpu_usage_history: List[float] = []  # Track GPU usage over time
+
         # Callbacks for Discord integration
         self._on_message: Optional[Callable[[str], Coroutine]] = None
         self._on_thinking: Optional[Callable[[str, int], Coroutine]] = None
@@ -137,6 +147,11 @@ class AgenticSession:
             logger.info(f"Started agentic session {self.context.conversation_id} with job {self.job_id}")
 
             self.is_running = True
+            self.start_time = time.time()
+            self.last_status_update = self.start_time
+
+            # Send initial status message
+            await self._send_initial_status_message()
 
             # Start processing stream
             await self._process_stream()
@@ -331,6 +346,14 @@ class AgenticSession:
         content = chunk.content or "Thinking..."
         step = chunk.metadata.get("step", 0) if chunk.metadata else 0
         self.thinking_steps.append(content)
+        self.current_step = max(self.current_step, step)
+
+        # Track tokens if provided in metadata
+        if chunk.metadata:
+            tokens = chunk.metadata.get("tokens", 0)
+            if tokens > 0:
+                self.tokens_generated = max(self.tokens_generated, tokens)
+
         logger.debug(f"Thinking step {step}: {content[:100]}")
 
     async def _handle_message(self, chunk: JobChunk) -> None:
@@ -365,6 +388,17 @@ class AgenticSession:
 
         tool_name = chunk.metadata.get("tool_name", "")
         tool_args = chunk.metadata.get("tool_args", {})
+
+        # Track step progression
+        self.current_step += 1
+
+        # Track tokens if provided
+        tokens = chunk.metadata.get("tokens", 0)
+        if tokens > 0:
+            self.tokens_generated = max(self.tokens_generated, tokens)
+
+        # Update status message immediately on tool call
+        await self._update_status_message()
 
         if self._on_tool_call:
             await self._on_tool_call(tool_name, tool_args)
@@ -463,11 +497,23 @@ class AgenticSession:
 
     async def _handle_progress(self, chunk: JobChunk) -> None:
         """Handle a progress update."""
+        if not chunk.metadata:
+            return
+
+        # Track step and tokens from progress updates
+        step = chunk.metadata.get("step", 0)
+        if step > 0:
+            self.current_step = max(self.current_step, step)
+
+        tokens = chunk.metadata.get("tokens", 0)
+        if tokens > 0:
+            self.tokens_generated = max(self.tokens_generated, tokens)
+
         if not self.config.enable_progress_updates:
             return
 
         content = chunk.content
-        percent = chunk.metadata.get("percent") if chunk.metadata else None
+        percent = chunk.metadata.get("percent")
 
         # Only show significant progress updates (every 20%)
         if percent and int(percent) % 20 == 0:
@@ -479,7 +525,16 @@ class AgenticSession:
         self.is_complete = True
         self.is_running = False
 
+        # Track tokens from final chunk
+        if chunk.metadata:
+            tokens = chunk.metadata.get("tokens", 0)
+            if tokens > 0:
+                self.tokens_generated = max(self.tokens_generated, tokens)
+
         logger.info(f"Agentic session complete. Final result length: {len(self.final_result)}")
+
+        # Finalize status message
+        await self._finalize_status_message("✅ Complete")
 
         # Send the final result to Discord
         if self._on_complete:
@@ -624,9 +679,128 @@ class AgenticSession:
             await self._send_message(f"⚠️ Error checking follow-up job: {str(e)[:200]}")
 
     async def _handle_heartbeat(self, chunk: JobChunk) -> None:
-        """Handle a heartbeat."""
-        # Heartbeats keep the job alive, no action needed
-        pass
+        """Handle a heartbeat - update status message with current metrics."""
+        # Update status message every few seconds to avoid rate limits
+        now = time.time()
+        if now - self.last_status_update >= 3.0:  # Update every 3 seconds
+            await self._update_status_message()
+            self.last_status_update = now
+
+    async def _send_initial_status_message(self) -> None:
+        """Send the initial status message that will be updated during processing."""
+        try:
+            status_text = self._format_status_message()
+            self.status_message = await self.message.channel.send(status_text[:2000])
+        except Exception as e:
+            logger.warning(f"Failed to send initial status message: {e}")
+
+    def _format_status_message(self) -> str:
+        """Format the current status as a message string."""
+        elapsed = time.time() - self.start_time if self.start_time > 0 else 0
+        gpu_percent = self._get_gpu_usage()
+
+        # Calculate tokens per second
+        tokens_per_sec = 0.0
+        if elapsed > 0:
+            tokens_per_sec = self.tokens_generated / elapsed
+
+        # Progress bar
+        progress = min(100, (self.current_step / self.total_steps) * 100) if self.total_steps > 0 else 0
+        bar_length = 10
+        filled = int(bar_length * progress / 100)
+        bar = "█" * filled + "░" * (bar_length - filled)
+
+        # Format the status message
+        status_lines = [
+            "🤔 **Working on your request...**",
+            f"",
+            f"⏱️ Elapsed: {elapsed:.1f}s | 📝 Tokens: {self.tokens_generated} ({tokens_per_sec:.1f}/s)",
+            f"🔄 Step: {self.current_step}/{self.total_steps} [{bar}] {progress:.0f}%",
+        ]
+
+        if gpu_percent > 0:
+            status_lines.append(f"🎮 GPU: {gpu_percent:.1f}%")
+
+        if self.job_id:
+            status_lines.append(f"🆔 Job: `{self.job_id[:8]}...`")
+
+        return "\n".join(status_lines)
+
+    def _get_gpu_usage(self) -> float:
+        """Get current GPU usage percentage. Returns 0 if unavailable."""
+        try:
+            # Try nvidia-smi first
+            import subprocess
+            result = subprocess.run(
+                ["nvidia-smi", "--query-gpu=utilization.gpu", "--format=csv,noheader,nounits"],
+                capture_output=True,
+                text=True,
+                timeout=1
+            )
+            if result.returncode == 0:
+                usage = float(result.stdout.strip().split('\n')[0])
+                self.gpu_usage_history.append(usage)
+                if len(self.gpu_usage_history) > 10:
+                    self.gpu_usage_history.pop(0)
+                return sum(self.gpu_usage_history) / len(self.gpu_usage_history)
+        except Exception:
+            pass
+
+        # Try ROCm (AMD)
+        try:
+            import subprocess
+            result = subprocess.run(
+                ["rocm-smi", "--showuse"],
+                capture_output=True,
+                text=True,
+                timeout=1
+            )
+            if result.returncode == 0:
+                # Parse GPU usage from rocm-smi output
+                for line in result.stdout.split('\n'):
+                    if '%' in line and 'GPU' in line:
+                        parts = line.split()
+                        for part in parts:
+                            if '%' in part:
+                                try:
+                                    usage = float(part.replace('%', ''))
+                                    self.gpu_usage_history.append(usage)
+                                    if len(self.gpu_usage_history) > 10:
+                                        self.gpu_usage_history.pop(0)
+                                    return sum(self.gpu_usage_history) / len(self.gpu_usage_history)
+                                except ValueError:
+                                    continue
+        except Exception:
+            pass
+
+        return 0.0
+
+    async def _update_status_message(self) -> None:
+        """Update the status message with current metrics."""
+        if not self.status_message:
+            return
+
+        try:
+            status_text = self._format_status_message()
+            await self.status_message.edit(content=status_text[:2000])
+        except Exception as e:
+            logger.debug(f"Failed to update status message: {e}")
+
+    async def _finalize_status_message(self, status: str = "✅ Complete") -> None:
+        """Finalize the status message when done."""
+        if not self.status_message:
+            return
+
+        try:
+            elapsed = time.time() - self.start_time if self.start_time > 0 else 0
+            final_text = (
+                f"{status}\n"
+                f"⏱️ Total time: {elapsed:.1f}s | 📝 Tokens generated: {self.tokens_generated}\n"
+                f"🔄 Steps completed: {self.current_step}/{self.total_steps}"
+            )
+            await self.status_message.edit(content=final_text[:2000])
+        except Exception as e:
+            logger.debug(f"Failed to finalize status message: {e}")
 
     async def _send_message(self, content: str) -> Optional[discord.Message]:
         """Send a message to the channel."""

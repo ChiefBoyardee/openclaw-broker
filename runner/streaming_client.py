@@ -168,10 +168,14 @@ class RunnerStreamClient:
             logger.warning(f"Request error posting chunk: {e}")
             return False
 
-    def post_thinking(self, thought: str, step: Optional[int] = None) -> bool:
+    def post_thinking(self, thought: str, step: Optional[int] = None, tokens: Optional[int] = None) -> bool:
         """Post a thinking/reasoning step."""
-        metadata = {"step": step} if step is not None else None
-        return self.post_chunk(ChunkType.THINKING, thought, metadata)
+        metadata = {}
+        if step is not None:
+            metadata["step"] = step
+        if tokens is not None:
+            metadata["tokens"] = tokens
+        return self.post_chunk(ChunkType.THINKING, thought, metadata if metadata else None)
 
     def post_message(self, message: str, msg_type: str = "info") -> bool:
         """Post an intermediate message to the user."""
@@ -221,9 +225,10 @@ class RunnerStreamClient:
         metadata = {"percent": percent} if percent is not None else None
         return self.post_chunk(ChunkType.PROGRESS, message, metadata)
 
-    def post_final(self, result: str) -> bool:
+    def post_final(self, result: str, tokens: Optional[int] = None) -> bool:
         """Post the final result and end the stream."""
-        success = self.post_chunk(ChunkType.FINAL, result)
+        metadata = {"tokens": tokens} if tokens is not None else None
+        success = self.post_chunk(ChunkType.FINAL, result, metadata)
         logger.info(f"Posted final chunk for job {self.job_id}, total chunks: {self.chunks_posted}")
         return success
 
