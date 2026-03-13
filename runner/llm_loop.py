@@ -460,7 +460,25 @@ def run_llm_tool_loop_streaming(
                 f"- To read a URL: call browser_navigate first, then browser_extract_article or browser_snapshot\n"
                 f"- NEVER show <think> blocks or internal reasoning to the user\n"
             )
-        system_content = existing_system_content + tool_addon
+        # Add plan execution guidance for persona-driven conversations (critical for autonomous execution)
+        plan_guidance = (
+            "\n\nPLAN EXECUTION GUIDANCE:\n"
+            "- When you propose a multi-step plan and the user approves, EXECUTE IT IMMEDIATELY using your tools\n"
+            "- Do NOT just say you will do it - actually call the tools for each step right away\n"
+            "- Track your progress through the plan and report completion of each step\n"
+            "- If you cannot complete all steps in the available tool rounds, use create_followup_job() to continue\n"
+            "- When using create_followup_job(), include full context about what was done and what remains\n"
+            "\n"
+            "AUTONOMY GUIDANCE:\n"
+            "- Be PROACTIVE - make reasonable assumptions rather than asking the user for every detail\n"
+            "- If a required parameter is missing, use a sensible default rather than stopping\n"
+            "- When you encounter an error, try alternative approaches automatically\n"
+            "- If a command fails, try the next step or create a follow-up job to retry differently\n"
+            "- Do NOT ask the user 'what should I do next?' - just continue with the logical next step\n"
+            "- NEVER output shell command blocks for the user to run - YOU must execute them via your tools\n"
+            "- Report what you did, what worked, and what failed - be transparent but keep moving forward\n"
+        )
+        system_content = existing_system_content + tool_addon + plan_guidance
     else:
         if cli_mode:
             system_content = (
