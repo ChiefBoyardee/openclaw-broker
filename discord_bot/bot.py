@@ -86,7 +86,7 @@ AGENTIC_AUTO_TRIGGER = os.environ.get("AGENTIC_AUTO_TRIGGER", "true").lower() in
 # Use absolute max timeout (900s) to allow for long-running multi-step tasks
 # The streaming client has idle timeout (300s) that resets when chunks are received
 AGENTIC_MAX_STREAM_WAIT = float(os.environ.get("AGENTIC_MAX_STREAM_WAIT", "900"))
-AGENTIC_DEFAULT_MAX_STEPS = int(os.environ.get("AGENTIC_DEFAULT_MAX_STEPS", "10"))
+AGENTIC_DEFAULT_MAX_STEPS = int(os.environ.get("AGENTIC_DEFAULT_MAX_STEPS", "25"))
 
 MAX_DISPLAY_LEN = 1500
 

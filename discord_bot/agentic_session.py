@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AgenticConfig:
     """Configuration for an agentic session."""
-    max_steps: int = 10
+    max_steps: int = 25
     enable_thinking_display: bool = True
     enable_progress_updates: bool = True
     # Use 900s absolute max to allow for long-running multi-step tasks

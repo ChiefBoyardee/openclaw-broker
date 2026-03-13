@@ -832,7 +832,7 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
         tools_list = payload_obj.get("tools") or list(config.get("allowed_tools", []))
         repo_context = payload_obj.get("repo_context")
         conversation_history = payload_obj.get("conversation_history")
-        max_steps = payload_obj.get("max_steps", config.get("max_steps", 10))
+        max_steps = payload_obj.get("max_steps", config.get("max_steps", 25))
         max_steps = int(max_steps)
         if max_steps < 1:
             max_steps = 1
