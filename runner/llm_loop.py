@@ -165,6 +165,15 @@ def run_llm_tool_loop(
             "- Track your progress through the plan and report completion of each step\n"
             "- If you cannot complete all steps in the available tool rounds, use create_followup_job() to continue\n"
             "- When using create_followup_job(), include full context about what was done and what remains\n"
+            "\n"
+            "AUTONOMY GUIDANCE:\n"
+            "- Be PROACTIVE - make reasonable assumptions rather than asking the user for every detail\n"
+            "- If a required parameter is missing, use a sensible default rather than stopping\n"
+            "- For nginx setup: if web_root is not specified, use /var/www/<domain> or /opt/nginx/<domain>\n"
+            "- When you encounter an error, try alternative approaches automatically\n"
+            "- If a command fails, try the next step or create a follow-up job to retry differently\n"
+            "- Do NOT ask the user 'what should I do next?' - just continue with the logical next step\n"
+            "- Report what you did, what worked, and what failed - be transparent but keep moving forward\n"
         )
         system_content = existing_system_content + tool_addon + plan_guidance
     else:
