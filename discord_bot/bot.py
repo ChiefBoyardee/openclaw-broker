@@ -83,7 +83,9 @@ CONVERSATION_TIMEOUT_MINUTES = float(os.environ.get("CONVERSATION_TIMEOUT_MINUTE
 # --- Agentic Mode Config ---
 AGENTIC_MODE = os.environ.get("AGENTIC_MODE", "true").lower() in ("true", "1", "yes")
 AGENTIC_AUTO_TRIGGER = os.environ.get("AGENTIC_AUTO_TRIGGER", "true").lower() in ("true", "1", "yes")
-AGENTIC_MAX_STREAM_WAIT = float(os.environ.get("AGENTIC_MAX_STREAM_WAIT", "300"))
+# Use absolute max timeout (900s) to allow for long-running multi-step tasks
+# The streaming client has idle timeout (300s) that resets when chunks are received
+AGENTIC_MAX_STREAM_WAIT = float(os.environ.get("AGENTIC_MAX_STREAM_WAIT", "900"))
 AGENTIC_DEFAULT_MAX_STEPS = int(os.environ.get("AGENTIC_DEFAULT_MAX_STEPS", "10"))
 
 MAX_DISPLAY_LEN = 1500

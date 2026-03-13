@@ -35,7 +35,9 @@ class AgenticConfig:
     max_steps: int = 10
     enable_thinking_display: bool = True
     enable_progress_updates: bool = True
-    max_stream_wait: float = 300.0
+    # Use 900s absolute max to allow for long-running multi-step tasks
+    # The streaming client's idle timeout (300s) will reset when chunks/heartbeats are received
+    max_stream_wait: float = 900.0
     tool_timeout: float = 60.0
     poll_interval: float = 1.0
     use_sse: bool = True  # Use SSE if available, otherwise polling
@@ -292,18 +294,20 @@ class AgenticSession:
 
             if self.config.use_sse:
                 # Use SSE streaming
+                # Pass absolute_timeout as the safety ceiling, idle timeout uses defaults
                 async for chunk in self.streaming_client.stream_job(
-                    self.job_id, timeout=self.config.max_stream_wait
+                    self.job_id, absolute_timeout=self.config.max_stream_wait
                 ):
                     chunks_received += 1
                     last_chunk_time = time.time()
                     await self._handle_chunk(chunk)
             else:
                 # Use polling fallback with status updates
+                # Pass both timeouts: idle timeout resets on chunk receipt, absolute is safety ceiling
                 async for chunk in self.streaming_client.poll_chunks(
                     self.job_id,
                     poll_interval=self.config.poll_interval,
-                    timeout=self.config.max_stream_wait,
+                    absolute_timeout=self.config.max_stream_wait,
                 ):
                     chunks_received += 1
                     last_chunk_time = time.time()
@@ -653,7 +657,7 @@ class AgenticSession:
                                     async for chunk in self.streaming_client.poll_chunks(
                                         followup_job_id,
                                         poll_interval=1.0,
-                                        timeout=30,
+                                        absolute_timeout=30,
                                     ):
                                         if chunk.chunk_type == "final":
                                             logger.info(f"Got final chunk from follow-up job {followup_job_id}")

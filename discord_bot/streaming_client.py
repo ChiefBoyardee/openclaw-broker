@@ -22,7 +22,11 @@ logger = logging.getLogger(__name__)
 BROKER_URL = os.environ.get("BROKER_URL", "http://127.0.0.1:8000").strip().rstrip("/")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 AGENTIC_MODE = os.environ.get("AGENTIC_MODE", "true").lower() in ("true", "1", "yes")
-AGENTIC_MAX_STREAM_WAIT = float(os.environ.get("AGENTIC_MAX_STREAM_WAIT", "300"))
+# Timeout configuration
+# IDLE_TIMEOUT: How long to wait without receiving any chunks before timing out (resets when chunks arrive)
+# ABSOLUTE_MAX_TIMEOUT: Hard upper limit on total session duration as safety valve
+AGENTIC_IDLE_TIMEOUT = float(os.environ.get("AGENTIC_IDLE_TIMEOUT", "300"))  # 5 minutes idle timeout
+AGENTIC_ABSOLUTE_MAX_TIMEOUT = float(os.environ.get("AGENTIC_ABSOLUTE_MAX_TIMEOUT", "900"))  # 15 minutes absolute max
 
 
 @dataclass
@@ -63,14 +67,20 @@ class BrokerStreamingClient:
     async def stream_job(
         self,
         job_id: str,
-        timeout: float = AGENTIC_MAX_STREAM_WAIT,
+        idle_timeout: float = AGENTIC_IDLE_TIMEOUT,
+        absolute_timeout: float = AGENTIC_ABSOLUTE_MAX_TIMEOUT,
     ) -> AsyncGenerator[JobChunk, None]:
         """
         Stream chunks for a job via Server-Sent Events.
 
+        Uses dual timeout strategy:
+        - Idle timeout: How long to wait without receiving chunks (resets when chunks arrive)
+        - Absolute timeout: Hard upper limit on total session duration as safety valve
+
         Args:
             job_id: The job ID to stream
-            timeout: Maximum time to wait for stream
+            idle_timeout: Maximum idle time without chunks before timeout (resets on chunk receipt)
+            absolute_timeout: Maximum total time to wait regardless of activity
 
         Yields:
             JobChunk objects as they arrive
@@ -81,8 +91,12 @@ class BrokerStreamingClient:
 
         url = f"{self.broker_url}/jobs/{job_id}/stream"
 
+        start_time = asyncio.get_event_loop().time()
+        last_chunk_time = start_time
+
         try:
-            timeout_obj = aiohttp.ClientTimeout(total=timeout)
+            # Use absolute timeout for the HTTP client, but we'll check idle timeout manually
+            timeout_obj = aiohttp.ClientTimeout(total=absolute_timeout)
             async with aiohttp.ClientSession(timeout=timeout_obj) as session:
                 async with session.get(url, headers=self._headers()) as response:
                     if response.status != 200:
@@ -114,7 +128,8 @@ class BrokerStreamingClient:
                                         logger.warning(f"Stream timeout for job {job_id}")
                                         return
 
-                                    # Yield chunk
+                                    # Yield chunk and reset idle timer
+                                    last_chunk_time = asyncio.get_event_loop().time()
                                     yield JobChunk(
                                         id=chunk_data.get("id", 0),
                                         chunk_type=chunk_data.get("type", "unknown"),
@@ -131,7 +146,15 @@ class BrokerStreamingClient:
                             pass
 
         except asyncio.TimeoutError:
-            logger.warning(f"Stream timeout for job {job_id}")
+            # Check if this was idle timeout or absolute timeout
+            total_elapsed = asyncio.get_event_loop().time() - start_time
+            idle_elapsed = asyncio.get_event_loop().time() - last_chunk_time
+            if idle_elapsed > idle_timeout:
+                logger.warning(f"Stream idle timeout for job {job_id} - no chunks for {idle_elapsed:.1f}s")
+            elif total_elapsed > absolute_timeout:
+                logger.warning(f"Stream absolute timeout for job {job_id} after {total_elapsed:.1f}s")
+            else:
+                logger.warning(f"Stream timeout for job {job_id} (total: {total_elapsed:.1f}s, idle: {idle_elapsed:.1f}s)")
         except Exception as e:
             logger.exception(f"Error streaming job {job_id}: {e}")
 
@@ -141,17 +164,23 @@ class BrokerStreamingClient:
         after_id: int = 0,
         chunk_type: Optional[str] = None,
         poll_interval: float = 1.0,
-        timeout: float = AGENTIC_MAX_STREAM_WAIT,
+        idle_timeout: float = AGENTIC_IDLE_TIMEOUT,
+        absolute_timeout: float = AGENTIC_ABSOLUTE_MAX_TIMEOUT,
     ) -> AsyncGenerator[JobChunk, None]:
         """
         Poll for chunks via HTTP polling (fallback when SSE is not available).
+
+        Uses dual timeout strategy:
+        - Idle timeout: How long to wait without receiving chunks (resets when chunks arrive)
+        - Absolute timeout: Hard upper limit on total session duration as safety valve
 
         Args:
             job_id: The job ID to poll
             after_id: Only return chunks after this ID
             chunk_type: Filter by chunk type
             poll_interval: Seconds between polls
-            timeout: Maximum time to poll
+            idle_timeout: Maximum idle time without chunks before timeout (resets on chunk receipt)
+            absolute_timeout: Maximum total time to poll regardless of activity
 
         Yields:
             JobChunk objects as they arrive
@@ -241,10 +270,20 @@ class BrokerStreamingClient:
                                 else:
                                     logger.debug(f"Job {job_id} not visible in jobs table yet, continuing to poll...")
 
-                # Check timeout
-                elapsed = asyncio.get_event_loop().time() - start_time
-                if elapsed > timeout:
-                    logger.warning(f"Polling timeout for job {job_id} after {elapsed:.1f}s. Received {chunks_received} chunks.")
+                # Check timeouts using dual strategy:
+                # 1. Idle timeout - reset whenever we receive chunks (allows long-running active jobs)
+                # 2. Absolute timeout - hard ceiling as safety valve
+                elapsed_total = asyncio.get_event_loop().time() - start_time
+                elapsed_since_chunk = asyncio.get_event_loop().time() - last_chunk_time
+
+                if elapsed_since_chunk > idle_timeout:
+                    logger.warning(f"Idle timeout for job {job_id} - no chunks for {elapsed_since_chunk:.1f}s. "
+                                   f"Total time: {elapsed_total:.1f}s, chunks received: {chunks_received}")
+                    return
+
+                if elapsed_total > absolute_timeout:
+                    logger.warning(f"Absolute timeout for job {job_id} after {elapsed_total:.1f}s (max: {absolute_timeout}s). "
+                                   f"Chunks received: {chunks_received}")
                     return
 
                 # Dynamically adjust warning interval based on operation duration
