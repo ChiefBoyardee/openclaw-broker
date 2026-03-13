@@ -92,8 +92,8 @@ Successfully implemented a modern, bidirectional communication system between th
 - New config variables:
   - `AGENTIC_MODE=true/false`
   - `AGENTIC_AUTO_TRIGGER=true/false`
-  - `AGENTIC_MAX_STREAM_WAIT=300`
-  - `AGENTIC_DEFAULT_MAX_STEPS=10`
+  - `AGENTIC_MAX_STREAM_WAIT=1800` (absolute safety-valve timeout; idle timeout of 300s resets on heartbeats)
+  - `AGENTIC_DEFAULT_MAX_STEPS=25`
 - New command: `!agentic <request>`
 - Auto-trigger on high-confidence tool intents
 - Integration with memory system for conversation context
@@ -134,8 +134,10 @@ Bot (agentic mode enabled by default):
 ```bash
 AGENTIC_MODE=true  # Already enabled by default
 AGENTIC_AUTO_TRIGGER=true  # Already enabled by default
-AGENTIC_MAX_STREAM_WAIT=300
-AGENTIC_DEFAULT_MAX_STEPS=10
+AGENTIC_IDLE_TIMEOUT=300  # Resets on each heartbeat/chunk (primary timeout)
+AGENTIC_ABSOLUTE_MAX_TIMEOUT=900  # Hard ceiling safety valve
+AGENTIC_MAX_STREAM_WAIT=1800  # Outer safety valve (should be > absolute max)
+AGENTIC_DEFAULT_MAX_STEPS=25
 ```
 
 **To disable features:**

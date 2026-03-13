@@ -225,7 +225,8 @@ async def poll_chunks(self, job_id: str) -> AsyncGenerator[JobChunk, None]:
    # Tuning parameters already added:
    AGENTIC_INITIAL_WAIT_SEC=15.0  # Wait for runner to claim
    POLL_INTERVAL_SEC=10         # Runner polling frequency
-   AGENTIC_MAX_STREAM_WAIT=300    # Max time to wait for results
+   AGENTIC_IDLE_TIMEOUT=300       # Idle timeout, resets on heartbeats
+   AGENTIC_ABSOLUTE_MAX_TIMEOUT=900  # Hard ceiling safety valve
    ```
 
 3. **Monitor Event Loop Health**:
