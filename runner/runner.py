@@ -892,16 +892,16 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
             def website_get_stats(_self, domain: str):
                 return website_get_stats(domain)
             # Nginx configurator tools
-            def nginx_generate_config(_self, domain: str, template: str = "wordpress", **kwargs):
-                return nginx_generate_config(domain, template, **kwargs)
-            def nginx_install_config(_self, domain: str, config_content: str):
-                return nginx_install_config(domain, config_content)
+            def nginx_generate_config(_self, domain: str, web_root: str, ssl_cert: Optional[str] = None, ssl_key: Optional[str] = None, enable_http2: bool = True, rate_limit_zone: str = "ai_site", rate_limit_rps: int = 10, rate_limit_burst: int = 20, security_config: Optional[dict] = None):
+                return nginx_generate_config(domain, web_root, ssl_cert, ssl_key, enable_http2, rate_limit_zone, rate_limit_rps, rate_limit_burst, security_config)
+            def nginx_install_config(_self, domain: str, config_content: str, enable: bool = True):
+                return nginx_install_config(domain, config_content, enable)
             def nginx_enable_site(_self, domain: str):
                 return nginx_enable_site(domain)
             def nginx_disable_site(_self, domain: str):
                 return nginx_disable_site(domain)
-            def nginx_remove_config(_self, domain: str, remove_all: bool = False):
-                return nginx_remove_config(domain, remove_all)
+            def nginx_remove_config(_self, domain: str):
+                return nginx_remove_config(domain)
             def nginx_test_config(_self):
                 return nginx_test_config()
             def nginx_reload(_self):
