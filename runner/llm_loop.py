@@ -598,25 +598,25 @@ def run_llm_tool_loop_streaming(
                 final_text = content or "(no response)"
                 break
 
-        # ── Execute all tool calls and collect results ──
-        tool_results_text = []  # For fallback plain-text format
+            # ── Execute all tool calls and collect results ──
+            tool_results_text = []  # For fallback plain-text format
 
-        # Add assistant message to history
-        if not fallback_parsed:
-            # Native tool_calls: use OpenAI format
-            assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or None}
-            assistant_msg["tool_calls"] = [
-                {"id": tc.get("id"), "type": "function", "function": {"name": tc.get("name"), "arguments": tc.get("arguments", "{}")}}
-                for tc in tc_list
-            ]
-            messages.append(assistant_msg)
+            # Add assistant message to history
+            if not fallback_parsed:
+                # Native tool_calls: use OpenAI format
+                assistant_msg: dict[str, Any] = {"role": "assistant", "content": content or None}
+                assistant_msg["tool_calls"] = [
+                    {"id": tc.get("id"), "type": "function", "function": {"name": tc.get("name"), "arguments": tc.get("arguments", "{}")}}
+                    for tc in tc_list
+                ]
+                messages.append(assistant_msg)
 
-        for tc in tc_list:
-            name = tc.get("name", "")
-            args_str = tc.get("arguments", "{}")
+            for tc in tc_list:
+                name = tc.get("name", "")
+                args_str = tc.get("arguments", "{}")
 
-            # Tool calls are logged but not streamed to Discord
-            logger.info(f"Tool call step {step}: {name}")
+                # Tool calls are logged but not streamed to Discord
+                logger.info(f"Tool call step {step}: {name}")
 
             # Handle special discord_send_message tool
             if name == "discord_send_message" and stream_client:
@@ -729,21 +729,21 @@ def run_llm_tool_loop_streaming(
                     "content": truncated_result,
                 })
 
-        # When fallback parser was used, inject results as plain-text user message
-        if fallback_parsed and tool_results_text:
-            results_block = "\n\n".join(tool_results_text)
-            messages.append({
-                "role": "assistant",
-                "content": content or "I'll look into that.",
-            })
-            messages.append({
-                "role": "user",
-                "content": (
-                    f"Here are the results from the tools you used:\n\n{results_block}\n\n"
-                    "Based on these results, provide your answer directly to the user. "
-                    "Do NOT call any more tools — just respond with your answer."
-                ),
-            })
+            # When fallback parser was used, inject results as plain-text user message
+            if fallback_parsed and tool_results_text:
+                results_block = "\n\n".join(tool_results_text)
+                messages.append({
+                    "role": "assistant",
+                    "content": content or "I'll look into that.",
+                })
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        f"Here are the results from the tools you used:\n\n{results_block}\n\n"
+                        "Based on these results, provide your answer directly to the user. "
+                        "Do NOT call any more tools — just respond with your answer."
+                    ),
+                })
 
             if final_text is not None and safety.get("reason") == "policy_refused":
                 break
