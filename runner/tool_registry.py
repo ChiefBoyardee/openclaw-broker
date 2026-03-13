@@ -1,6 +1,13 @@
 """
 Tool registry and dispatcher for LLM tool-calling (Sprint 5). OpenAI function-calling schema; dispatch to runner helpers.
 
+Supports two modes:
+1. Legacy mode: 39+ individual OpenAI function-calling tools (TOOL_DEFINITIONS)
+2. CLI mode: Single run(command="...") tool with CLI-style command routing (RUN_TOOL_DEFINITION)
+
+CLI mode (default for agentic) reduces cognitive load on the LLM by exposing all
+capabilities as CLI subcommands through a single tool, keeping KV cache stable.
+
 Supports bidirectional tool categories:
 - RUNNER_LOCAL: Tools executed entirely on the runner (repo tools, browser, etc.)
 - BIDIRECTIONAL: Tools that can be executed by either runner or bot
@@ -1079,3 +1086,59 @@ def parse_tool_args(arguments: str) -> dict[str, Any]:
         return json.loads(arguments)
     except json.JSONDecodeError as e:
         raise ValueError(f"invalid tool arguments JSON: {e}") from e
+
+
+# ── CLI Mode: Single run(command="...") tool ──
+
+def _build_run_tool_description() -> str:
+    """Build the run tool description with command overview (Level 0 progressive disclosure)."""
+    from runner.cli_router import get_router
+    router = get_router()
+    command_list = router.get_command_list()
+    return (
+        "Execute a command. All capabilities are available as CLI-style subcommands.\n\n"
+        f"Available commands:\n{command_list}\n\n"
+        "Examples:\n"
+        '  run(command="repo list")\n'
+        '  run(command="browser navigate https://example.com")\n'
+        '  run(command="github list-repos --limit 5")\n'
+        '  run(command="repo grep myrepo TODO")\n'
+    )
+
+
+def get_cli_tool_schema() -> list[dict[str, Any]]:
+    """Return the single run tool schema for CLI mode."""
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "run",
+                "description": _build_run_tool_description(),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "CLI command to execute (e.g. 'repo list', 'browser navigate https://example.com')",
+                        },
+                    },
+                    "required": ["command"],
+                },
+            },
+        }
+    ]
+
+
+def cli_dispatch(
+    command_str: str,
+    repo_context: Optional[dict[str, str]],
+    *,
+    runner_bridge: Any,
+) -> str:
+    """
+    Dispatch a CLI command string through the CLI router.
+    This is the CLI-mode equivalent of dispatch().
+    """
+    from runner.cli_router import get_router
+    router = get_router()
+    return router.execute(command_str, runner_bridge, repo_context)

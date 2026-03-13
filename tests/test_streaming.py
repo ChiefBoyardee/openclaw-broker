@@ -354,7 +354,11 @@ class TestBotStreamingClient:
         mock_get.return_value.__aenter__ = AsyncMock(return_value=mock_response)
         mock_get.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        client = BrokerStreamingClient(enabled=True)
+        client = BrokerStreamingClient(
+            broker_url="http://test:8000",
+            bot_token="test-token",
+        )
+        client.enabled = True
         chunks = []
         async for chunk in client.poll_chunks("job-1", poll_interval=0.1, timeout=1.0):
             chunks.append(chunk)

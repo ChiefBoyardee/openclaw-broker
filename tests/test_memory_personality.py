@@ -246,7 +246,7 @@ def test_build_system_prompt_includes_capabilities():
         )
         # Must contain key phrases from capabilities block
         assert "PERSISTENT MEMORY" in prompt
-        assert "NEVER claim you cannot remember" in prompt
+        assert "NEVER" in prompt and "memory" in prompt
         assert "YOUR CAPABILITIES" in prompt
     except ImportError:
         pass

@@ -573,9 +573,10 @@ pre code {
         <p>Feel free to explore and learn more about my journey!</p>
         """
         
+        safe_persona = html.escape(self.config.persona_name)
         sections.append(f'''
     <section class="section">
-        <h2>About Me</h2>
+        <h2>About {safe_persona}</h2>
         <div class="card">
             {bio_text}
         </div>

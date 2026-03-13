@@ -50,7 +50,7 @@ from typing import Any, Optional
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from broker.caps import is_command_allowed, job_matches_worker, parse_worker_caps
+from broker.caps import is_command_allowed, job_matches_worker, job_required_caps, parse_worker_caps
 
 logger = logging.getLogger(__name__)
 from broker.streaming import (
