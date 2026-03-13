@@ -530,8 +530,13 @@ def run_llm_tool_loop_streaming(
     # Track cumulative tokens across all LLM calls
     tokens_generated = 0
 
+    # Start continuous heartbeat thread for the entire job duration
+    # This ensures heartbeats are sent during LLM calls, tool execution, and between steps
+    stop_heartbeat = threading.Event()
+    heartbeat_thread = None
+
     def _heartbeat_worker():
-        """Background thread to send heartbeats during long LLM calls."""
+        """Background thread to send heartbeats continuously during job execution."""
         heartbeat_count = 0
         while not stop_heartbeat.is_set():
             if stream_client:
@@ -541,25 +546,29 @@ def run_llm_tool_loop_streaming(
                 if not success:
                     logger.warning(f"Heartbeat failed for job {stream_client.job_id}")
             heartbeat_count += 1
-            time.sleep(20)  # Check every 20 seconds (well under 30s timeout)
+            # Sleep for 15 seconds to ensure we stay well under the 30s broker timeout
+            # This gives buffer for network latency and processing delays
+            time.sleep(15)
 
-    while step < max_steps:
-        step += 1
+    if stream_client:
+        heartbeat_thread = threading.Thread(target=_heartbeat_worker, daemon=True)
+        heartbeat_thread.start()
+        logger.info(f"Started continuous heartbeat thread for job {stream_client.job_id}")
 
-        if stream_client:
-            stream_client.post_heartbeat()
-            # Post a thinking/progress message so user knows we're working
-            if step == 1:
-                stream_client.post_thinking("Analyzing request and preparing to generate response...", step=step, tokens=tokens_generated)
+    try:
+        while step < max_steps:
+            step += 1
 
-        # Start heartbeat thread for long LLM calls
-        stop_heartbeat = threading.Event()
-        heartbeat_thread = None
-        if stream_client:
-            heartbeat_thread = threading.Thread(target=_heartbeat_worker, daemon=True)
-            heartbeat_thread.start()
+            # Send immediate heartbeat and status update at start of each step
+            if stream_client:
+                stream_client.post_heartbeat()
+                # Post a thinking/progress message so user knows we're working
+                stream_client.post_thinking(
+                    f"Processing step {step}/{max_steps}...",
+                    step=step,
+                    tokens=tokens_generated
+                )
 
-        try:
             response = chat_with_tools(
                 messages,
                 tools_schema,
@@ -569,11 +578,6 @@ def run_llm_tool_loop_streaming(
                 temperature=config.get("temperature", 0.2),
                 max_tokens=config.get("max_tokens", 4096),
             )
-        finally:
-            # Stop heartbeat thread after LLM call completes
-            if heartbeat_thread:
-                stop_heartbeat.set()
-                heartbeat_thread.join(timeout=1)
 
         content = response.get("content")
         tc_list = response.get("tool_calls")
@@ -743,6 +747,13 @@ def run_llm_tool_loop_streaming(
 
         if final_text is not None and safety.get("reason") == "policy_refused":
             break
+
+    finally:
+        # Stop the continuous heartbeat thread when job completes
+        if heartbeat_thread:
+            logger.info(f"Stopping heartbeat thread")
+            stop_heartbeat.set()
+            heartbeat_thread.join(timeout=2)
 
     if final_text is None:
         final_text = "Max tool steps reached without final answer."
