@@ -83,9 +83,9 @@ CONVERSATION_TIMEOUT_MINUTES = float(os.environ.get("CONVERSATION_TIMEOUT_MINUTE
 # --- Agentic Mode Config ---
 AGENTIC_MODE = os.environ.get("AGENTIC_MODE", "true").lower() in ("true", "1", "yes")
 AGENTIC_AUTO_TRIGGER = os.environ.get("AGENTIC_AUTO_TRIGGER", "true").lower() in ("true", "1", "yes")
-# Use absolute max timeout (900s) to allow for long-running multi-step tasks
-# The streaming client has idle timeout (300s) that resets when chunks are received
-AGENTIC_MAX_STREAM_WAIT = float(os.environ.get("AGENTIC_MAX_STREAM_WAIT", "900"))
+# Absolute max timeout as safety valve - the streaming client's idle timeout (300s)
+# resets on every chunk/heartbeat and is the primary timeout mechanism
+AGENTIC_MAX_STREAM_WAIT = float(os.environ.get("AGENTIC_MAX_STREAM_WAIT", "1800"))
 AGENTIC_DEFAULT_MAX_STEPS = int(os.environ.get("AGENTIC_DEFAULT_MAX_STEPS", "25"))
 
 MAX_DISPLAY_LEN = 1500
@@ -1269,20 +1269,12 @@ async def handle_agentic_command(message: discord.Message, prompt: str):
 
         # Show typing indicator while processing
         async with message.channel.typing():
-            # Start the session with timeout
-            try:
-                final_result = await asyncio.wait_for(
-                    session.start(
-                        prompt=prompt,
-                        conversation_history=conversation_history,
-                    ),
-                    timeout=AGENTIC_MAX_STREAM_WAIT
-                )
-            except asyncio.TimeoutError:
-                logger.error(f"Agentic session timed out after {AGENTIC_MAX_STREAM_WAIT}s")
-                final_result = None
-                await status_msg.edit(content="⏱️ Agentic session timed out. The operation took too long.")
-                return
+            # Start the session - timeouts are handled by the streaming client's
+            # dual timeout strategy (idle timeout resets on heartbeats, absolute timeout as safety valve)
+            final_result = await session.start(
+                prompt=prompt,
+                conversation_history=conversation_history,
+            )
 
         if final_result:
             # Store in memory if enabled

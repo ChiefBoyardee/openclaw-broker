@@ -87,8 +87,9 @@ Add to your bot environment (all have sensible defaults):
 # Agentic Mode (all enabled by default)
 AGENTIC_MODE=true  # Already enabled by default
 AGENTIC_AUTO_TRIGGER=true  # Already enabled by default
-AGENTIC_MAX_STREAM_WAIT=300
-AGENTIC_DEFAULT_MAX_STEPS=10
+AGENTIC_IDLE_TIMEOUT=300       # Resets on heartbeats (primary timeout)
+AGENTIC_ABSOLUTE_MAX_TIMEOUT=900  # Hard ceiling safety valve
+AGENTIC_DEFAULT_MAX_STEPS=25
 
 # Broker connection
 BROKER_URL=http://your-broker:8000

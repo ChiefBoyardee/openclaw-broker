@@ -325,6 +325,22 @@ class AgenticSession:
         except Exception as e:
             logger.exception(f"Error processing stream: {e}")
 
+        # If the stream ended without a final chunk, the session timed out
+        # (either idle timeout from no heartbeats, or absolute timeout safety valve)
+        if not self.is_complete:
+            elapsed = time.time() - self.start_time if self.start_time > 0 else 0
+            idle_time = time.time() - last_chunk_time
+            logger.warning(
+                f"Stream ended without final chunk for job {self.job_id}. "
+                f"Elapsed: {elapsed:.1f}s, idle: {idle_time:.1f}s, chunks: {chunks_received}. "
+                f"Session timed out (idle timeout or absolute max reached)."
+            )
+            await self._finalize_status_message("⏱️ Timed out")
+            await self._send_message(
+                "⏱️ The operation timed out. The runner may still be working — "
+                "you can check status or try again."
+            )
+
     async def _handle_chunk(self, chunk: JobChunk) -> None:
         """Handle a single chunk from the stream."""
         from discord_bot.streaming_client import JobChunk as JC
