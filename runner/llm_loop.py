@@ -351,8 +351,8 @@ def run_llm_tool_loop(
                 ),
             })
 
-        if final_text is not None and safety.get("reason") == "policy_refused":
-            break
+            if final_text is not None and safety.get("reason") == "policy_refused":
+                break
 
     if final_text is None:
         final_text = "Max tool steps reached without final answer."
@@ -579,24 +579,24 @@ def run_llm_tool_loop_streaming(
                 max_tokens=config.get("max_tokens", 4096),
             )
 
-        content = response.get("content")
-        tc_list = response.get("tool_calls")
-        fallback_parsed = response.get("fallback_parsed", False)
-        tokens_used = response.get("tokens", 0)
+            content = response.get("content")
+            tc_list = response.get("tool_calls")
+            fallback_parsed = response.get("fallback_parsed", False)
+            tokens_used = response.get("tokens", 0)
 
-        # Track cumulative tokens
-        if tokens_used > 0:
-            # Approximate tracking since we don't have prompt tokens separately
-            tokens_generated += tokens_used
+            # Track cumulative tokens
+            if tokens_used > 0:
+                # Approximate tracking since we don't have prompt tokens separately
+                tokens_generated += tokens_used
 
-        if content and not tc_list:
-            # Final answer received
-            final_text = content
-            break
+            if content and not tc_list:
+                # Final answer received
+                final_text = content
+                break
 
-        if not tc_list:
-            final_text = content or "(no response)"
-            break
+            if not tc_list:
+                final_text = content or "(no response)"
+                break
 
         # ── Execute all tool calls and collect results ──
         tool_results_text = []  # For fallback plain-text format
@@ -745,8 +745,8 @@ def run_llm_tool_loop_streaming(
                 ),
             })
 
-        if final_text is not None and safety.get("reason") == "policy_refused":
-            break
+            if final_text is not None and safety.get("reason") == "policy_refused":
+                break
 
     finally:
         # Stop the continuous heartbeat thread when job completes
