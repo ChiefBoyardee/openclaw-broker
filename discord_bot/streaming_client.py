@@ -293,11 +293,11 @@ class BrokerStreamingClient:
 
                 # Adjust warning interval: longer waits = less frequent warnings
                 # Normal LLM inference can take 30-120 seconds
-                if elapsed < 15:
+                if elapsed_total < 15:
                     warning_interval = 5   # Startup phase: frequent warnings
-                elif elapsed < 45:
+                elif elapsed_total < 45:
                     warning_interval = 15  # Normal inference: moderate warnings
-                elif elapsed < 120:
+                elif elapsed_total < 120:
                     warning_interval = 30  # Long inference: rare warnings
                 else:
                     warning_interval = 60  # Very long tasks: minimal warnings
@@ -306,7 +306,7 @@ class BrokerStreamingClient:
                 # 1. We haven't received any chunks at all AND enough time passed
                 # 2. OR it's been a very long time since any chunk (potential stall)
                 if chunks_received == 0 and time_since_warning > warning_interval:
-                    logger.warning(f"No chunks received for job {job_id} after {elapsed:.1f}s. "
+                    logger.warning(f"No chunks received for job {job_id} after {elapsed_total:.1f}s. "
                                    f"Runner may not have streaming enabled. Check ENABLE_STREAMING and WORKER_TOKEN.")
                     last_warning_time = asyncio.get_event_loop().time()
                 elif chunks_received > 0 and time_since_last_chunk > 60 and time_since_warning > 60:
