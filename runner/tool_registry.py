@@ -74,6 +74,15 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
     "nginx_test_config": ToolCategory.RUNNER_LOCAL,
     "nginx_reload": ToolCategory.RUNNER_LOCAL,
     "nginx_get_status": ToolCategory.RUNNER_LOCAL,
+    # VPS Remote tools (execute on VPS via SSH)
+    "vps_remote_exec": ToolCategory.RUNNER_LOCAL,
+    "vps_remote_copy": ToolCategory.RUNNER_LOCAL,
+    "vps_test_connection": ToolCategory.RUNNER_LOCAL,
+    "vps_nginx_status": ToolCategory.RUNNER_LOCAL,
+    "vps_nginx_reload": ToolCategory.RUNNER_LOCAL,
+    "vps_website_list": ToolCategory.RUNNER_LOCAL,
+    "vps_website_read": ToolCategory.RUNNER_LOCAL,
+    "vps_certbot_renew": ToolCategory.RUNNER_LOCAL,
     # Discord-native tools (bot-only)
     "discord_send_message": ToolCategory.BOT_ONLY,
     "discord_send_embed": ToolCategory.BOT_ONLY,
@@ -677,6 +686,89 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
+    # VPS Remote execution tools (execute on VPS via SSH)
+    {
+        "type": "function",
+        "function": {
+            "name": "vps_remote_exec",
+            "description": "Execute a command on the VPS via SSH. Use for nginx management, file operations, and certbot on the remote VPS. Commands are validated against an allowlist for security.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "description": "Command to execute on VPS (e.g., 'nginx -t', 'systemctl status nginx', 'ls -la /var/www/')",
+                    },
+                    "timeout": {
+                        "type": "integer",
+                        "description": "Timeout in seconds",
+                        "default": 60,
+                    },
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "vps_test_connection",
+            "description": "Test SSH connection to the VPS. Verifies that VPS_HOST, VPS_USER, and VPS_SSH_KEY_PATH are correctly configured.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "vps_nginx_status",
+            "description": "Get nginx status from the VPS via SSH. Shows running status, enabled sites, and configuration.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "vps_nginx_reload",
+            "description": "Reload nginx configuration on the VPS safely. Tests config first, then reloads if valid.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "vps_website_list",
+            "description": "List files in the website directory on the VPS.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path within website directory (e.g., 'posts', 'knowledge')",
+                        "default": "",
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "vps_certbot_renew",
+            "description": "Renew SSL certificates on the VPS using certbot. Run this when certificates are expiring.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "dry_run": {
+                        "type": "boolean",
+                        "description": "Test renewal without making changes",
+                        "default": True,
+                    },
+                },
+                "required": [],
+            },
+        },
+    },
     # Discord-native tools (bidirectional - executed by bot)
     {
         "type": "function",
@@ -1095,6 +1187,22 @@ def dispatch(
         return runner_bridge.nginx_reload()
     if name == "nginx_get_status":
         return runner_bridge.nginx_get_status()
+    # VPS Remote tools
+    if name == "vps_remote_exec":
+        command = args.get("command", "").strip()
+        if not command:
+            raise ValueError("command required")
+        return runner_bridge.vps_remote_exec(command, args.get("timeout"))
+    if name == "vps_test_connection":
+        return runner_bridge.vps_test_connection()
+    if name == "vps_nginx_status":
+        return runner_bridge.vps_nginx_status()
+    if name == "vps_nginx_reload":
+        return runner_bridge.vps_nginx_reload()
+    if name == "vps_website_list":
+        return runner_bridge.vps_website_list(args.get("path", ""))
+    if name == "vps_certbot_renew":
+        return runner_bridge.vps_certbot_renew(args.get("dry_run", True))
     if name == "create_followup_job":
         command = args.get("command", "")
         prompt = args.get("prompt", "")

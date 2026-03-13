@@ -497,6 +497,15 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
                     caps.append(cap)
         except ImportError:
             pass
+        # Add VPS remote execution capabilities
+        try:
+            from runner.vps_remote_executor import get_vps_remote_capabilities
+            vps_remote_caps = get_vps_remote_capabilities()
+            for cap in vps_remote_caps:
+                if cap not in caps:
+                    caps.append(cap)
+        except ImportError:
+            pass
         worker_caps = _worker_caps_list()
         if "llm_task" not in caps:
             caps.append("llm_task")
@@ -723,6 +732,37 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
                 return nginx_reload()
             def nginx_get_status(_self):
                 return nginx_get_status()
+            # VPS Remote execution tools
+            def vps_remote_exec(_self, command: str, timeout: Optional[int] = None):
+                from runner.vps_remote_executor import execute_on_vps
+                return execute_on_vps(command, timeout=timeout)
+            def vps_test_connection(_self):
+                from runner.vps_remote_executor import test_vps_connection
+                return test_vps_connection()
+            def vps_nginx_status(_self):
+                from runner.vps_remote_executor import execute_on_vps
+                return execute_on_vps("systemctl status nginx && ls -la /etc/nginx/sites-enabled/")
+            def vps_nginx_reload(_self):
+                from runner.vps_remote_executor import execute_on_vps
+                # Test config first, then reload
+                test_result = execute_on_vps("nginx -t")
+                test_data = json.loads(test_result)
+                if not test_data.get("success"):
+                    return json.dumps({
+                        "success": False,
+                        "error": "Nginx config test failed, not reloading",
+                        "test_output": test_data.get("stderr", "")
+                    })
+                return execute_on_vps("systemctl reload nginx")
+            def vps_website_list(_self, path: str = ""):
+                from runner.vps_remote_executor import execute_on_vps
+                base_path = os.environ.get("VPS_WEBSITE_BASE", "/var/www/urgo")
+                full_path = os.path.join(base_path, path) if path else base_path
+                return execute_on_vps(f"ls -la {full_path}")
+            def vps_certbot_renew(_self, dry_run: bool = True):
+                from runner.vps_remote_executor import execute_on_vps
+                cmd = "certbot renew --dry-run" if dry_run else "certbot renew"
+                return execute_on_vps(cmd)
             def create_followup_job(_self, command: str, payload: dict, reason: str = "", parent_job_id: str = "") -> str:
                 """Create a follow-up job via the broker API. Returns the new job ID."""
                 try:
@@ -908,11 +948,40 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
                 return nginx_reload()
             def nginx_get_status(_self):
                 return nginx_get_status()
+            # VPS Remote execution tools
+            def vps_remote_exec(_self, command: str, timeout: Optional[int] = None):
+                from runner.vps_remote_executor import execute_on_vps
+                return execute_on_vps(command, timeout=timeout)
+            def vps_test_connection(_self):
+                from runner.vps_remote_executor import test_vps_connection
+                return test_vps_connection()
+            def vps_nginx_status(_self):
+                from runner.vps_remote_executor import execute_on_vps
+                return execute_on_vps("systemctl status nginx && ls -la /etc/nginx/sites-enabled/")
+            def vps_nginx_reload(_self):
+                from runner.vps_remote_executor import execute_on_vps
+                test_result = execute_on_vps("nginx -t")
+                test_data = json.loads(test_result)
+                if not test_data.get("success"):
+                    return json.dumps({
+                        "success": False,
+                        "error": "Nginx config test failed, not reloading",
+                        "test_output": test_data.get("stderr", "")
+                    })
+                return execute_on_vps("systemctl reload nginx")
+            def vps_website_list(_self, path: str = ""):
+                from runner.vps_remote_executor import execute_on_vps
+                base_path = os.environ.get("VPS_WEBSITE_BASE", "/var/www/urgo")
+                full_path = os.path.join(base_path, path) if path else base_path
+                return execute_on_vps(f"ls -la {full_path}")
+            def vps_certbot_renew(_self, dry_run: bool = True):
+                from runner.vps_remote_executor import execute_on_vps
+                cmd = "certbot renew --dry-run" if dry_run else "certbot renew"
+                return execute_on_vps(cmd)
             def create_followup_job(_self, command: str, payload: dict, reason: str = "", parent_job_id: str = "") -> str:
                 """Create a follow-up job via the broker API. Returns the new job ID."""
                 try:
                     headers = {"X-Worker-Token": os.environ.get("WORKER_TOKEN", ""), "X-Worker-Id": WORKER_ID}
-                    # Include parent job reference in the payload for tracking
                     enriched_payload = payload.copy()
                     if parent_job_id:
                         enriched_payload["_parent_job_id"] = parent_job_id

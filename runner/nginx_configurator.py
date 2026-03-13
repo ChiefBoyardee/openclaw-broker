@@ -775,10 +775,320 @@ def nginx_get_status() -> str:
         })
 
 
+def _generate_csp_header(security_config: Optional[dict] = None) -> str:
+    """
+    Generate Content Security Policy header.
+
+    Args:
+        security_config: Optional security configuration dict
+
+    Returns:
+        CSP header directive string
+    """
+    # Default CSP for static websites
+    default_csp = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://esm.sh; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+        "font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; "
+        "img-src 'self' data: https:; "
+        "connect-src 'self'; "
+        "frame-ancestors 'self'; "
+        "base-uri 'self'; "
+        "form-action 'self';"
+    )
+
+    if security_config and "csp" in security_config:
+        return security_config["csp"]
+
+    return default_csp
+
+
+def generate_secure_nginx_config(
+    domain: str,
+    web_root: str,
+    ssl_cert: Optional[str] = None,
+    ssl_key: Optional[str] = None,
+    enable_http2: bool = True,
+    enable_hsts: bool = True,
+    enable_csp: bool = True,
+    rate_limit_rps: int = 10,
+    security_preset: str = "strict",
+) -> str:
+    """
+    Generate a security-hardened nginx configuration with advanced options.
+
+    Args:
+        domain: Domain name
+        web_root: Web root path
+        ssl_cert: SSL certificate path
+        ssl_key: SSL key path
+        enable_http2: Enable HTTP/2
+        enable_hsts: Enable HTTP Strict Transport Security
+        enable_csp: Enable Content Security Policy
+        rate_limit_rps: Rate limit requests per second
+        security_preset: Security level ("basic", "strict", "paranoid")
+
+    Returns:
+        JSON string with generated configuration
+    """
+    try:
+        # Validate inputs
+        if not _validate_domain_name(domain):
+            return json.dumps({
+                "success": False,
+                "error": "Invalid domain name",
+                "domain": domain
+            })
+
+        if not _validate_web_root(web_root):
+            return json.dumps({
+                "success": False,
+                "error": "Invalid or unsafe web root path",
+                "path": web_root
+            })
+
+        # Security presets
+        presets = {
+            "basic": {
+                "rate_limit_burst": 20,
+                "ssl_protocols": "TLSv1.2 TLSv1.3",
+                "ssl_ciphers": "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256",
+            },
+            "strict": {
+                "rate_limit_burst": 15,
+                "ssl_protocols": "TLSv1.2 TLSv1.3",
+                "ssl_ciphers": "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384",
+            },
+            "paranoid": {
+                "rate_limit_burst": 10,
+                "ssl_protocols": "TLSv1.3",
+                "ssl_ciphers": "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384",
+            },
+        }
+
+        preset = presets.get(security_preset, presets["strict"])
+
+        # Build configuration
+        safe_domain = _escape_nginx_string(domain)
+        safe_web_root = _escape_nginx_string(web_root)
+
+        config_parts = []
+
+        # Rate limiting zone
+        rate_limit_zone = f"limit_req_zone $binary_remote_addr zone={safe_domain}:10m rate={rate_limit_rps}r/s;"
+
+        # HTTP to HTTPS redirect
+        if ssl_cert and ssl_key:
+            http_server = f"""server {{
+    listen 80;
+    server_name {safe_domain};
+    return 301 https://$server_name$request_uri;
+}}
+"""
+            config_parts.append(http_server)
+
+        # Main server block
+        listen_directive = "listen 443 ssl"
+        if enable_http2 and ssl_cert and ssl_key:
+            listen_directive += " http2"
+        elif not ssl_cert:
+            listen_directive = "listen 80"
+
+        # Security headers based on preset
+        security_headers = []
+        security_headers.append('    add_header X-Frame-Options "SAMEORIGIN" always;')
+        security_headers.append('    add_header X-Content-Type-Options "nosniff" always;')
+        security_headers.append('    add_header X-XSS-Protection "1; mode=block" always;')
+        security_headers.append('    add_header Referrer-Policy "strict-origin-when-cross-origin" always;')
+        security_headers.append('    add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;')
+
+        if enable_csp:
+            csp = _generate_csp_header()
+            security_headers.append(f'    add_header Content-Security-Policy "{_escape_nginx_string(csp)}" always;')
+
+        if enable_hsts and ssl_cert and ssl_key:
+            security_headers.append('    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;')
+
+        headers_block = "\n".join(security_headers)
+
+        # SSL configuration
+        ssl_block = ""
+        if ssl_cert and ssl_key:
+            safe_cert = _escape_nginx_string(ssl_cert)
+            safe_key = _escape_nginx_string(ssl_key)
+            ssl_block = f"""
+    # SSL Configuration
+    ssl_certificate {safe_cert};
+    ssl_certificate_key {safe_key};
+    ssl_protocols {preset['ssl_protocols']};
+    ssl_ciphers '{preset['ssl_ciphers']}';
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    ssl_stapling on;
+    ssl_stapling_verify on;
+"""
+
+        # Rate limiting
+        rate_limit_directive = f"limit_req zone={safe_domain} burst={preset['rate_limit_burst']} nodelay;"
+
+        main_server = f"""server {{
+    {listen_directive};
+    server_name {safe_domain};
+
+    root {safe_web_root};
+    index index.html index.htm;
+
+    # Security Headers
+{headers_block}
+
+    # Hide nginx version
+    server_tokens off;
+
+    # Rate limiting
+    {rate_limit_directive}
+
+    # Deny access to hidden files
+    location ~ /\\. {{
+        deny all;
+        return 404;
+    }}
+
+    # Deny access to sensitive files
+    location ~* \\.(bak|backup|swp|tmp|temp|log|sql|env|config|yml|yaml|json)$ {{
+        deny all;
+        return 404;
+    }}
+
+    # Deny access to version control
+    location ~* /(\\.git|\\.svn|\\.hg|\\.bzr)/ {{
+        deny all;
+        return 404;
+    }}
+
+    # Main location
+    location / {{
+        try_files $uri $uri/ =404;
+        # Additional security: no directory listing
+        autoindex off;
+    }}
+
+    # Static files caching with security
+    location ~* \\.(jpg|jpeg|png|gif|ico|css|js|svg|woff|woff2|ttf|eot)$ {{
+        expires 30d;
+        add_header Cache-Control "public, immutable";
+        add_header X-Content-Type-Options "nosniff" always;
+        # Prevent access if file is hidden or starts with dot
+        location ~ /\\. {{
+            deny all;
+            return 404;
+        }}
+    }}
+{ssl_block}}}
+"""
+        config_parts.append(main_server)
+
+        full_config = "\n".join(config_parts)
+
+        return json.dumps({
+            "success": True,
+            "domain": domain,
+            "web_root": web_root,
+            "ssl_enabled": bool(ssl_cert and ssl_key),
+            "security_preset": security_preset,
+            "config": full_config,
+            "rate_limit_zone": rate_limit_zone,
+            "security_features": {
+                "rate_limiting": True,
+                "hsts": enable_hsts and bool(ssl_cert),
+                "csp": enable_csp,
+                "security_headers": True,
+                "ssl_stapling": bool(ssl_cert),
+            },
+            "message": f"Secure nginx configuration generated for {domain} (preset: {security_preset})"
+        }, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": str(e),
+            "message": "Failed to generate secure nginx configuration"
+        })
+
+
+def verify_ssl_setup(domain: str) -> str:
+    """
+    Verify SSL certificate setup for a domain.
+
+    Args:
+        domain: Domain to verify
+
+    Returns:
+        JSON string with verification results
+    """
+    try:
+        import subprocess
+
+        results = {
+            "domain": domain,
+            "ssl_tests": {},
+            "certificate_info": {},
+        }
+
+        # Test SSL connection
+        ssl_test = subprocess.run(
+            ["openssl", "s_client", "-connect", f"{domain}:443", "-servername", domain, "-verify_return_error"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        results["ssl_tests"]["connection"] = ssl_test.returncode == 0
+
+        # Get certificate info
+        cert_info = subprocess.run(
+            ["openssl", "s_client", "-connect", f"{domain}:443", "-servername", domain, "-showcerts"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        # Parse certificate expiration
+        if "-----BEGIN CERTIFICATE-----" in cert_info.stdout:
+            results["certificate_info"]["present"] = True
+        else:
+            results["certificate_info"]["present"] = False
+
+        # Check HTTP to HTTPS redirect
+        import urllib.request
+        try:
+            http_url = f"http://{domain}"
+            req = urllib.request.Request(http_url, method='HEAD')
+            req.add_header('User-Agent', 'Mozilla/5.0 (compatible; SSLBot/1.0)')
+            with urllib.request.urlopen(req, timeout=10) as response:
+                results["redirect_test"] = response.geturl().startswith("https://")
+        except Exception as e:
+            results["redirect_test"] = False
+            results["redirect_error"] = str(e)
+
+        results["success"] = results["ssl_tests"]["connection"] and results["certificate_info"]["present"]
+
+        return json.dumps(results, indent=2)
+
+    except Exception as e:
+        return json.dumps({
+            "success": False,
+            "error": str(e),
+            "domain": domain,
+        }, indent=2)
+
+
 def get_nginx_capabilities() -> list[str]:
     """Return list of nginx management capabilities."""
     return [
         "nginx_generate_config",
+        "nginx_generate_secure_config",
         "nginx_install_config",
         "nginx_enable_site",
         "nginx_disable_site",
@@ -786,4 +1096,5 @@ def get_nginx_capabilities() -> list[str]:
         "nginx_test_config",
         "nginx_reload",
         "nginx_get_status",
+        "nginx_verify_ssl",
     ]

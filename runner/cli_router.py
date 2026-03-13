@@ -714,6 +714,40 @@ def _handle_plan_approve(
     return bridge.approve_echo(plan_id)
 
 
+# ── VPS remote handlers ──
+
+def _handle_vps_test(bridge: Any, repo_context: Any, **kwargs) -> str:
+    return bridge.vps_test_connection()
+
+
+def _handle_vps_exec(
+    bridge: Any, repo_context: Any, command: str, **kwargs
+) -> str:
+    timeout = kwargs.get("timeout", 60)
+    return bridge.vps_remote_exec(command, timeout)
+
+
+def _handle_vps_nginx_status(bridge: Any, repo_context: Any, **kwargs) -> str:
+    return bridge.vps_nginx_status()
+
+
+def _handle_vps_nginx_reload(bridge: Any, repo_context: Any, **kwargs) -> str:
+    return bridge.vps_nginx_reload()
+
+
+def _handle_vps_website_list(
+    bridge: Any, repo_context: Any, path: str = "", **kwargs
+) -> str:
+    return bridge.vps_website_list(path)
+
+
+def _handle_vps_certbot_renew(
+    bridge: Any, repo_context: Any, **kwargs
+) -> str:
+    dry_run = kwargs.get("dry_run", True)
+    return bridge.vps_certbot_renew(dry_run)
+
+
 # ── Build the global router instance ──
 
 
@@ -989,6 +1023,35 @@ def build_router() -> CLIRouter:
     router.register_command("nginx", "test-config", _handle_nginx_test_config, "Test nginx config")
     router.register_command("nginx", "reload", _handle_nginx_reload, "Reload nginx")
     router.register_command("nginx", "status", _handle_nginx_status, "Get nginx status")
+
+    # ── vps ──
+    router.register_group("vps", "VPS remote execution via SSH")
+    router.register_command(
+        "vps", "test", _handle_vps_test, "Test SSH connection to VPS",
+    )
+    router.register_command(
+        "vps", "exec", _handle_vps_exec, "Execute command on VPS",
+        params=[
+            CommandParam("command", "Command to execute", required=True),
+            CommandParam("timeout", "Timeout in seconds", default=60, param_type="integer"),
+        ],
+        positional_args=["command"],
+    )
+    router.register_command(
+        "vps", "nginx-status", _handle_vps_nginx_status, "Get nginx status on VPS",
+    )
+    router.register_command(
+        "vps", "nginx-reload", _handle_vps_nginx_reload, "Reload nginx on VPS",
+    )
+    router.register_command(
+        "vps", "website-list", _handle_vps_website_list, "List website files on VPS",
+        params=[CommandParam("path", "Subdirectory path", default="")],
+        positional_args=["path"],
+    )
+    router.register_command(
+        "vps", "certbot-renew", _handle_vps_certbot_renew, "Renew SSL certificates on VPS",
+        params=[CommandParam("dry-run", "Test renewal without changes", default=True, param_type="boolean")],
+    )
 
     # ── discord ──
     router.register_group("discord", "Discord messaging (bot-executed)")
