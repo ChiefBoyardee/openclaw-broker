@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 
 # ── Known tool names (used for function-call-style detection) ──
 _KNOWN_TOOLS = {
+    # CLI mode: single run tool
+    "run",
+    # Legacy mode: individual tools
     "browser_navigate", "browser_snapshot", "browser_click", "browser_type",
     "browser_search", "browser_extract_article", "browser_close",
     "repo_list", "repo_status", "repo_last_commit", "repo_grep", "repo_readfile",
@@ -96,6 +99,7 @@ def _parse_func_args(args_string: str, func_name: str) -> dict[str, str]:
 
     # Map to the most likely parameter name based on the tool
     param_map = {
+        "run": "command",  # CLI mode: single tool
         "browser_navigate": "url",
         "browser_search": "query",
         "browser_type": "text",

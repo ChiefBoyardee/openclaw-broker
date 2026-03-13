@@ -725,15 +725,19 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
                 return nginx_get_status()
         bridge = _Bridge()
 
+        # CLI mode: use single run(command) tool instead of individual tool catalog
+        # For llm_task, respect config but default to False for backward compat
+        use_cli_mode = payload_obj.get("cli_mode", False)
+
         if stream_client and stream_client.enabled:
             # Use streaming version
             envelope = run_llm_tool_loop_streaming(
                 prompt, tools_list, repo_context, max_steps, config, bridge,
-                conversation_history, stream_client
+                conversation_history, stream_client, cli_mode=use_cli_mode
             )
         else:
             # Use standard version
-            envelope = run_llm_tool_loop(prompt, tools_list, repo_context, max_steps, config, bridge, conversation_history)
+            envelope = run_llm_tool_loop(prompt, tools_list, repo_context, max_steps, config, bridge, conversation_history, cli_mode=use_cli_mode)
 
         return json.dumps(envelope)
 
@@ -883,12 +887,16 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
         # Build bridge
         bridge = _Bridge()
 
+        # CLI mode: default ON for agentic, can be overridden by payload or config
+        use_cli_mode = payload_obj.get("cli_mode", config.get("cli_mode", True))
+
         if not stream_client.enabled:
             logger.warning(f"Streaming not enabled for job {job_id_for_streaming} - ENABLE_STREAMING={os.environ.get('ENABLE_STREAMING', 'not set')}, has_worker_token={bool(os.environ.get('WORKER_TOKEN', ''))}. Falling back to standard mode.")
-            
+
             # Fall back to standard non-streaming loop
             envelope = run_llm_tool_loop(
-                prompt, tools_list, repo_context, max_steps, config, bridge, conversation_history
+                prompt, tools_list, repo_context, max_steps, config, bridge, conversation_history,
+                cli_mode=use_cli_mode
             )
             return json.dumps(envelope)
 
@@ -898,10 +906,12 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
         if not stream_client.verify_job_visible(max_retries=5, initial_delay=0.2):
             logger.warning(f"Job {job_id_for_streaming} not visible after retries, attempting to post anyway...")
 
+        logger.info(f"Running agentic loop cli_mode={use_cli_mode}")
+
         # Run streaming loop
         envelope = run_llm_tool_loop_streaming(
             prompt, tools_list, repo_context, max_steps, config, bridge,
-            conversation_history, stream_client
+            conversation_history, stream_client, cli_mode=use_cli_mode
         )
 
         return json.dumps(envelope)

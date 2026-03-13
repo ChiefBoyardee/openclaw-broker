@@ -16,3 +16,10 @@ ignore = ["E501"]
 # Tests and scripts set env before importing broker (E402); unused imports ok
 "tests/*" = ["F401", "E402"]
 "scripts/*" = ["F401", "E402"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "asyncio: mark a test as async",
+    "integration: mark a test as integration",
+]

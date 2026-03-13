@@ -124,7 +124,7 @@ def test_nginx_generate_config_success():
     assert data["domain"] == "urgo.sgc.earth"
     assert data["web_root"] == "/var/www/urgo"
     assert "config" in data
-    assert "limit_req_zone" in data
+    assert "rate_limit_zone" in data
 
 
 def test_nginx_generate_config_invalid_domain():

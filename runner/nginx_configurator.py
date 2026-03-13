@@ -100,15 +100,15 @@ def _validate_web_root(path: str) -> bool:
         '/srv/',
         '/usr/share/nginx/html',
         '/opt/www/',
-        '/home/*/www/',  # User web dirs (simplified check)
     ]
-    
+
     # Check if path is in allowed location
-    is_allowed = any(
-        path.startswith(prefix.rstrip('*')) or prefix.rstrip('*').startswith('/home/')
-        for prefix in allowed_prefixes
-    )
-    
+    is_allowed = any(path.startswith(prefix) for prefix in allowed_prefixes)
+
+    # Also allow /home/<user>/www/ pattern (user web dirs)
+    if not is_allowed and re.match(r'^/home/[^/]+/www/', path):
+        is_allowed = True
+
     return is_allowed
 
 

@@ -1,5 +1,9 @@
 """
 LLM config for runner (Sprint 5). Reads env for OpenAI-compatible endpoint and tool loop limits.
+
+CLI_MODE controls whether the LLM uses a single run(command="...") tool (CLI mode)
+or the legacy catalog of 39+ individual function-calling tools. CLI mode is recommended
+for agentic interactions as it reduces tool selection overhead and keeps KV cache stable.
 """
 from __future__ import annotations
 
@@ -7,7 +11,7 @@ import os
 
 
 def get_llm_config() -> dict:
-    """Read LLM-related env and return config dict. Keys: base_url, api_key, model, temperature, max_tokens, max_steps, allowed_tools."""
+    """Read LLM-related env and return config dict. Keys: base_url, api_key, model, temperature, max_tokens, max_steps, allowed_tools, cli_mode."""
     provider = os.environ.get("LLM_PROVIDER", "openai_compat").strip().lower()
     base_url = (os.environ.get("LLM_BASE_URL", "") or "").strip().rstrip("/")
     api_key = (os.environ.get("LLM_API_KEY", "") or "").strip()
@@ -17,6 +21,9 @@ def get_llm_config() -> dict:
     max_steps = int(os.environ.get("LLM_TOOL_LOOP_MAX_STEPS", "6"))
     max_output_bytes = int(os.environ.get("LLM_MAX_OUTPUT_BYTES", "65536"))  # 64KB default
     max_tool_arg_bytes = int(os.environ.get("LLM_MAX_TOOL_ARG_BYTES", "4096"))  # 4KB default
+    # CLI mode: single run(command="...") tool instead of 39+ individual tools
+    # Default: true for agentic mode, configurable via env
+    cli_mode = os.environ.get("CLI_MODE", "true").strip().lower() in ("true", "1", "yes")
     allowed_str = (os.environ.get("LLM_ALLOWED_TOOLS", "") or "").strip()
     allowed_tools = {t.strip() for t in allowed_str.split(",") if t.strip()} if allowed_str else set()
     if not allowed_tools:
@@ -52,4 +59,5 @@ def get_llm_config() -> dict:
         "max_output_bytes": max_output_bytes,
         "max_tool_arg_bytes": max_tool_arg_bytes,
         "allowed_tools": allowed_tools,
+        "cli_mode": cli_mode,
     }

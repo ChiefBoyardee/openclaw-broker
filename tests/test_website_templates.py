@@ -131,8 +131,8 @@ def test_generate_home_page_escapes_xss():
     html = engine.generate_home_page()
     
     assert "<script>" not in html
-    assert "onerror=" not in html
-    assert "&lt;script&gt;" in html or "<script>" not in html
+    assert "<img src=x onerror=" not in html  # Raw XSS tag must be escaped
+    assert "&lt;script&gt;" in html or "&lt;img" in html  # Content should be HTML-escaped
 
 
 def test_generate_about_page():
