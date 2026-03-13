@@ -82,6 +82,7 @@ class AgenticSession:
         self.tool_calls_completed: Set[int] = set()
         self.messages_sent = 0
         self.thinking_steps: List[str] = []
+        self.followup_job_ids: List[str] = []  # Track follow-up jobs created
 
         # Callbacks for Discord integration
         self._on_message: Optional[Callable[[str], Coroutine]] = None
@@ -247,6 +248,12 @@ class AgenticSession:
         if not self.job_id:
             return
 
+        # Track chunk timing for status updates
+        last_chunk_time = time.time()
+        chunks_received = 0
+        status_update_interval = 30  # Update status every 30 seconds during long waits
+        last_status_update = time.time()
+
         try:
             # Initial delay to allow runner to claim the job before we start polling
             # Runner polls every 10s (default), but may have longer intervals or network delays
@@ -273,15 +280,28 @@ class AgenticSession:
                 async for chunk in self.streaming_client.stream_job(
                     self.job_id, timeout=self.config.max_stream_wait
                 ):
+                    chunks_received += 1
+                    last_chunk_time = time.time()
                     await self._handle_chunk(chunk)
             else:
-                # Use polling fallback
+                # Use polling fallback with status updates
                 async for chunk in self.streaming_client.poll_chunks(
                     self.job_id,
                     poll_interval=self.config.poll_interval,
                     timeout=self.config.max_stream_wait,
                 ):
+                    chunks_received += 1
+                    last_chunk_time = time.time()
                     await self._handle_chunk(chunk)
+
+                    # Periodic status update for long-running operations
+                    now = time.time()
+                    if now - last_status_update > status_update_interval:
+                        time_since_chunk = now - last_chunk_time
+                        if time_since_chunk > 20:
+                            logger.info(f"Agentic session {self.job_id} still active, "
+                                       f"{chunks_received} chunks received, waiting for more...")
+                        last_status_update = now
 
         except Exception as e:
             logger.exception(f"Error processing stream: {e}")
@@ -468,12 +488,140 @@ class AgenticSession:
             # Send the final result as a message
             await self._send_message(self.final_result)
 
+        # Check for follow-up jobs in the result
+        await self._check_and_handle_followups()
+
         # Clear thinking reactions and add completion reaction
         try:
             await self.message.clear_reactions()
             await self.message.add_reaction("✅")
         except Exception as e:
             logger.debug(f"Failed to update reactions: {e}")
+
+    async def _check_and_handle_followups(self) -> None:
+        """Check for follow-up jobs in the final result and poll for their completion."""
+        if not self.final_result:
+            return
+
+        try:
+            # Try to parse the result as JSON
+            result_data = json.loads(self.final_result)
+
+            # Check if this result has a followup job
+            if isinstance(result_data, dict):
+                # Check for followup job in the result envelope
+                followup = result_data.get("followup")
+                if followup and isinstance(followup, dict):
+                    followup_job_id = followup.get("job_id")
+                    if followup_job_id:
+                        self.followup_job_ids.append(followup_job_id)
+                        logger.info(f"Detected follow-up job {followup_job_id}, will poll for results")
+                        # Start polling for the follow-up job
+                        asyncio.create_task(self._poll_followup_job(followup_job_id))
+
+                # Also check tool calls for create_followup_job results
+                tool_calls = result_data.get("tool_calls", [])
+                for tc in tool_calls:
+                    if tc.get("name") == "create_followup_job":
+                        # Parse the output to get the job ID
+                        output = tc.get("truncated_output", "")
+                        try:
+                            output_data = json.loads(output)
+                            if output_data.get("success"):
+                                job_id = output_data.get("job_id")
+                                if job_id and job_id not in self.followup_job_ids:
+                                    self.followup_job_ids.append(job_id)
+                                    logger.info(f"Detected follow-up job {job_id} from tool call, will poll for results")
+                                    asyncio.create_task(self._poll_followup_job(job_id))
+                        except json.JSONDecodeError:
+                            pass
+
+        except json.JSONDecodeError:
+            # Result is not JSON, no follow-up to process
+            pass
+        except Exception as e:
+            logger.exception(f"Error checking for follow-up jobs: {e}")
+
+    async def _poll_followup_job(self, followup_job_id: str) -> None:
+        """Poll for a follow-up job's completion and stream results."""
+        import os
+        import aiohttp
+
+        broker_url = os.environ.get("BROKER_URL", "http://127.0.0.1:8000").rstrip("/")
+        bot_token = os.environ.get("BOT_TOKEN", "")
+
+        max_wait = 600  # Maximum 10 minutes wait for follow-up
+        poll_interval = 2.0
+        waited = 0
+
+        logger.info(f"Starting to poll for follow-up job {followup_job_id}")
+
+        await self._send_message(f"⏳ Continuing work in follow-up job...")
+
+        try:
+            while waited < max_wait:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(
+                        f"{broker_url}/jobs/{followup_job_id}",
+                        headers={"X-Bot-Token": bot_token},
+                    ) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            status = data.get("status")
+
+                            if status == "done":
+                                # Job is complete, get the result
+                                result = data.get("result", "")
+                                logger.info(f"Follow-up job {followup_job_id} completed")
+                                await self._send_message(f"✅ Follow-up work complete!")
+                                if result:
+                                    # Try to parse and extract just the final result
+                                    try:
+                                        result_data = json.loads(result)
+                                        final_text = result_data.get("final", result)
+                                        if final_text and final_text != self.final_result:
+                                            await self._send_message(final_text[:1900])
+                                    except json.JSONDecodeError:
+                                        if result != self.final_result:
+                                            await self._send_message(result[:1900])
+                                return
+
+                            elif status == "failed":
+                                error = data.get("error", "Unknown error")
+                                logger.error(f"Follow-up job {followup_job_id} failed: {error}")
+                                await self._send_message(f"❌ Follow-up job failed: {error[:500]}")
+                                return
+
+                            elif status == "running":
+                                # Job is still running, poll for chunks if streaming
+                                try:
+                                    async for chunk in self.streaming_client.poll_chunks(
+                                        followup_job_id,
+                                        poll_interval=1.0,
+                                        timeout=30,
+                                    ):
+                                        if chunk.chunk_type == "final":
+                                            logger.info(f"Got final chunk from follow-up job {followup_job_id}")
+                                            if chunk.content and chunk.content != self.final_result:
+                                                await self._send_message(chunk.content[:1900])
+                                            return
+                                        elif chunk.chunk_type == "message":
+                                            if chunk.content:
+                                                await self._send_message(chunk.content[:1900])
+                                except Exception as e:
+                                    logger.debug(f"Error polling chunks for follow-up: {e}")
+
+                # Wait before next poll
+                await asyncio.sleep(poll_interval)
+                waited += poll_interval
+
+            # Max wait exceeded
+            logger.warning(f"Follow-up job {followup_job_id} did not complete within {max_wait}s")
+            await self._send_message(f"⏱️ Follow-up job is still running. You can check status later with job ID: `{followup_job_id}`")
+
+        except Exception as e:
+            logger.exception(f"Error polling follow-up job {followup_job_id}: {e}")
+            await self._send_message(f"⚠️ Error checking follow-up job: {str(e)[:200]}")
 
     async def _handle_heartbeat(self, chunk: JobChunk) -> None:
         """Handle a heartbeat."""

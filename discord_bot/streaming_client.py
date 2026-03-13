@@ -166,8 +166,13 @@ class BrokerStreamingClient:
         chunks_received = 0
 
         logger.info(f"Starting chunk polling for job {job_id}")
-        warning_interval = 10  # Warn every 10 seconds if no chunks received
+        # Progressively increase warning interval during long operations
+        # Initial period: frequent warnings (job startup issues)
+        # After 30s: reduce warnings (normal LLM inference time)
+        # After 60s: rare warnings (long-running tasks)
+        warning_interval = 10  # Initial: warn every 10 seconds
         last_warning_time = start_time
+        last_chunk_time = start_time
 
         not_found_attempts = 0
         while True:
@@ -195,6 +200,7 @@ class BrokerStreamingClient:
                                     created_at=chunk_data.get("created_at"),
                                 )
                                 last_id = max(last_id, chunk.id)
+                                last_chunk_time = asyncio.get_event_loop().time()
                                 
                                 if chunks_received == 1:
                                     logger.info(f"First chunk received for job {job_id}: {chunk.chunk_type}")
@@ -241,17 +247,41 @@ class BrokerStreamingClient:
                     logger.warning(f"Polling timeout for job {job_id} after {elapsed:.1f}s. Received {chunks_received} chunks.")
                     return
 
-                # Warn if no chunks received after warning_interval
+                # Dynamically adjust warning interval based on operation duration
+                # and time since last chunk (long gaps are normal during LLM inference)
+                time_since_last_chunk = asyncio.get_event_loop().time() - last_chunk_time
                 time_since_warning = asyncio.get_event_loop().time() - last_warning_time
+
+                # Adjust warning interval: longer waits = less frequent warnings
+                # Normal LLM inference can take 30-120 seconds
+                if elapsed < 15:
+                    warning_interval = 5   # Startup phase: frequent warnings
+                elif elapsed < 45:
+                    warning_interval = 15  # Normal inference: moderate warnings
+                elif elapsed < 120:
+                    warning_interval = 30  # Long inference: rare warnings
+                else:
+                    warning_interval = 60  # Very long tasks: minimal warnings
+
+                # Only warn if:
+                # 1. We haven't received any chunks at all AND enough time passed
+                # 2. OR it's been a very long time since any chunk (potential stall)
                 if chunks_received == 0 and time_since_warning > warning_interval:
-                    logger.warning(f"No chunks received for job {job_id} after {elapsed:.1f}s. Check runner ENABLE_STREAMING and WORKER_TOKEN settings.")
+                    logger.warning(f"No chunks received for job {job_id} after {elapsed:.1f}s. "
+                                   f"Runner may not have streaming enabled. Check ENABLE_STREAMING and WORKER_TOKEN.")
+                    last_warning_time = asyncio.get_event_loop().time()
+                elif chunks_received > 0 and time_since_last_chunk > 60 and time_since_warning > 60:
+                    # We've received chunks before but nothing for 60+ seconds
+                    logger.warning(f"No new chunks for job {job_id} in {time_since_last_chunk:.1f}s "
+                                   f"(received {chunks_received} total). LLM may still processing or connection stalled.")
                     last_warning_time = asyncio.get_event_loop().time()
 
                 # Check job status
                 job_done = await self._is_job_done(job_id)
                 if job_done and not chunks:
-                    # Job done and no new chunks
-                    await asyncio.sleep(0.5)  # One more poll after delay
+                    # Job done and no new chunks - check one more time after short delay
+                    # to catch any final chunks that might be in transit
+                    await asyncio.sleep(0.5)
                     continue
 
                 await asyncio.sleep(poll_interval)

@@ -83,6 +83,8 @@ TOOL_CATEGORIES: dict[str, ToolCategory] = {
     "discord_reply": ToolCategory.BOT_ONLY,
     "self_memory_add_fact": ToolCategory.BOT_ONLY,
     "self_memory_add_reflection": ToolCategory.BOT_ONLY,
+    # Job management tools (runner-local)
+    "create_followup_job": ToolCategory.RUNNER_LOCAL,
 }
 
 
@@ -788,6 +790,24 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
                 "required": ["content"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_followup_job",
+            "description": "Create a follow-up job to continue work after this job completes. Use when: (1) max_steps may be reached before completing all work, (2) you need to wait/async for external state changes, (3) you want to checkpoint progress, (4) work should continue without user input.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "enum": ["llm_task", "llm_agentic"], "description": "Command type for follow-up job"},
+                    "prompt": {"type": "string", "description": "The prompt/task for the follow-up job. Should include context about what was already done and what remains."},
+                    "reason": {"type": "string", "description": "Why this follow-up job is being created"},
+                    "max_steps": {"type": "integer", "description": "Max steps for follow-up job", "default": 10},
+                    "tools": {"type": "array", "items": {"type": "string"}, "description": "Tools to enable for follow-up"}
+                },
+                "required": ["command", "prompt", "reason"]
+            }
+        }
     }
 ]
 
@@ -1075,6 +1095,20 @@ def dispatch(
         return runner_bridge.nginx_reload()
     if name == "nginx_get_status":
         return runner_bridge.nginx_get_status()
+    if name == "create_followup_job":
+        command = args.get("command", "")
+        prompt = args.get("prompt", "")
+        reason = args.get("reason", "")
+        if not command or not prompt:
+            raise ValueError("command and prompt required")
+        # Build payload for the follow-up job
+        payload = {
+            "prompt": prompt,
+            "max_steps": args.get("max_steps", 10),
+            "tools": args.get("tools", []),
+            "streaming": True,
+        }
+        return runner_bridge.create_followup_job(command, payload, reason)
     raise ValueError(f"unknown tool: {name}")
 
 

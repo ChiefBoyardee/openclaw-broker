@@ -157,7 +157,16 @@ def run_llm_tool_loop(
                 f"- To read a URL: call browser_navigate first, then browser_extract_article or browser_snapshot\n"
                 f"- NEVER show <think> blocks or internal reasoning to the user\n"
             )
-        system_content = existing_system_content + tool_addon
+        # Add plan execution guidance for persona-driven conversations
+        plan_guidance = (
+            "\n\nPLAN EXECUTION GUIDANCE:\n"
+            "- When you propose a multi-step plan and the user approves, EXECUTE IT IMMEDIATELY using your tools\n"
+            "- Do NOT just say you will do it - actually call the tools for each step right away\n"
+            "- Track your progress through the plan and report completion of each step\n"
+            "- If you cannot complete all steps in the available tool rounds, use create_followup_job() to continue\n"
+            "- When using create_followup_job(), include full context about what was done and what remains\n"
+        )
+        system_content = existing_system_content + tool_addon + plan_guidance
     else:
         if cli_mode:
             system_content = (
@@ -513,16 +522,25 @@ def run_llm_tool_loop_streaming(
 
     def _heartbeat_worker():
         """Background thread to send heartbeats during long LLM calls."""
+        heartbeat_count = 0
         while not stop_heartbeat.is_set():
             if stream_client:
-                stream_client.post_heartbeat()
-            time.sleep(25)  # Send heartbeat every 25 seconds (under 30s timeout)
+                # Force heartbeat every 3rd call to ensure broker receives it
+                force = (heartbeat_count % 3 == 2)
+                success = stream_client.post_heartbeat(force=force)
+                if not success:
+                    logger.warning(f"Heartbeat failed for job {stream_client.job_id}")
+            heartbeat_count += 1
+            time.sleep(20)  # Check every 20 seconds (well under 30s timeout)
 
     while step < max_steps:
         step += 1
 
         if stream_client:
             stream_client.post_heartbeat()
+            # Post a thinking/progress message so user knows we're working
+            if step == 1:
+                stream_client.post_thinking("Analyzing request and preparing to generate response...", step=1)
 
         # Start heartbeat thread for long LLM calls
         stop_heartbeat = threading.Event()

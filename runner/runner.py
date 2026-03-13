@@ -723,6 +723,34 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
                 return nginx_reload()
             def nginx_get_status(_self):
                 return nginx_get_status()
+            def create_followup_job(_self, command: str, payload: dict, reason: str = "", parent_job_id: str = "") -> str:
+                """Create a follow-up job via the broker API. Returns the new job ID."""
+                try:
+                    headers = {"X-Worker-Token": os.environ.get("WORKER_TOKEN", ""), "X-Worker-Id": WORKER_ID}
+                    # Include parent job reference in the payload for tracking
+                    enriched_payload = payload.copy()
+                    if parent_job_id:
+                        enriched_payload["_parent_job_id"] = parent_job_id
+                    enriched_payload["_followup_reason"] = reason
+                    response = requests.post(
+                        f"{BROKER_URL}/jobs",
+                        headers=headers,
+                        json={"command": command, "payload": json.dumps(enriched_payload)},
+                        timeout=30
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        job_id = data.get("id")
+                        logger.info(f"Created follow-up job {job_id} for reason: {reason}")
+                        return json.dumps({"success": True, "job_id": job_id, "reason": reason})
+                    else:
+                        error_msg = f"Failed to create follow-up job: HTTP {response.status_code}"
+                        logger.error(error_msg)
+                        return json.dumps({"success": False, "error": error_msg, "reason": reason})
+                except Exception as e:
+                    error_msg = f"Error creating follow-up job: {str(e)}"
+                    logger.exception(error_msg)
+                    return json.dumps({"success": False, "error": error_msg, "reason": reason})
         bridge = _Bridge()
 
         # CLI mode: use single run(command) tool instead of individual tool catalog
@@ -880,6 +908,34 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
                 return nginx_reload()
             def nginx_get_status(_self):
                 return nginx_get_status()
+            def create_followup_job(_self, command: str, payload: dict, reason: str = "", parent_job_id: str = "") -> str:
+                """Create a follow-up job via the broker API. Returns the new job ID."""
+                try:
+                    headers = {"X-Worker-Token": os.environ.get("WORKER_TOKEN", ""), "X-Worker-Id": WORKER_ID}
+                    # Include parent job reference in the payload for tracking
+                    enriched_payload = payload.copy()
+                    if parent_job_id:
+                        enriched_payload["_parent_job_id"] = parent_job_id
+                    enriched_payload["_followup_reason"] = reason
+                    response = requests.post(
+                        f"{BROKER_URL}/jobs",
+                        headers=headers,
+                        json={"command": command, "payload": json.dumps(enriched_payload)},
+                        timeout=30
+                    )
+                    if response.status_code == 200:
+                        data = response.json()
+                        job_id = data.get("id")
+                        logger.info(f"Created follow-up job {job_id} for reason: {reason}")
+                        return json.dumps({"success": True, "job_id": job_id, "reason": reason})
+                    else:
+                        error_msg = f"Failed to create follow-up job: HTTP {response.status_code}"
+                        logger.error(error_msg)
+                        return json.dumps({"success": False, "error": error_msg, "reason": reason})
+                except Exception as e:
+                    error_msg = f"Error creating follow-up job: {str(e)}"
+                    logger.exception(error_msg)
+                    return json.dumps({"success": False, "error": error_msg, "reason": reason})
 
         # Create streaming client
         stream_client = create_stream_client(job_id_for_streaming)

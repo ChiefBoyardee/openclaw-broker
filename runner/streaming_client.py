@@ -227,18 +227,35 @@ class RunnerStreamClient:
         logger.info(f"Posted final chunk for job {self.job_id}, total chunks: {self.chunks_posted}")
         return success
 
-    def post_heartbeat(self) -> bool:
+    def post_heartbeat(self, force: bool = False) -> bool:
         """Post a heartbeat to keep the job lease alive.
 
         This is called automatically during long operations.
+
+        Args:
+            force: If True, post heartbeat even if not enough time has elapsed.
+                   Use this when you need to ensure a heartbeat is actually sent.
+
+        Returns:
+            True if heartbeat was posted or was too soon (within rate limit),
+            False if posting failed.
         """
         now = time.time()
-        if now - self.last_heartbeat < STREAMING_HEARTBEAT_SECONDS:
-            return True  # Too soon
+        time_since_last = now - self.last_heartbeat
+
+        if not force and time_since_last < STREAMING_HEARTBEAT_SECONDS:
+            # Within rate limit window - check if we're approaching timeout
+            # If we're close to the heartbeat interval, force a post to keep connection alive
+            if time_since_last < STREAMING_HEARTBEAT_SECONDS * 0.8:
+                return True  # Too soon, no need to post
+            # We're at 80%+ of the interval, go ahead and post
 
         success = self.post_chunk(ChunkType.HEARTBEAT, None, {"timestamp": now})
         if success:
             self.last_heartbeat = now
+            logger.debug(f"Heartbeat posted for job {self.job_id}")
+        else:
+            logger.warning(f"Failed to post heartbeat for job {self.job_id}")
         return success
 
     def create_bidirectional_tool_call(
