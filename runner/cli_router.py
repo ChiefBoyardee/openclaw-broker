@@ -1030,6 +1030,9 @@ def build_router() -> CLIRouter:
         "vps", "test", _handle_vps_test, "Test SSH connection to VPS",
     )
     router.register_command(
+        "vps", "test-connection", _handle_vps_test, "Test SSH connection to VPS (alias)",
+    )
+    router.register_command(
         "vps", "exec", _handle_vps_exec, "Execute command on VPS",
         params=[
             CommandParam("command", "Command to execute", required=True),
