@@ -22,11 +22,12 @@ logger = logging.getLogger(__name__)
 BROKER_URL = os.environ.get("BROKER_URL", "http://127.0.0.1:8000").strip().rstrip("/")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 AGENTIC_MODE = os.environ.get("AGENTIC_MODE", "true").lower() in ("true", "1", "yes")
-# Timeout configuration
-# IDLE_TIMEOUT: How long to wait without receiving any chunks before timing out (resets when chunks arrive)
-# ABSOLUTE_MAX_TIMEOUT: Hard upper limit on total session duration as safety valve
-AGENTIC_IDLE_TIMEOUT = float(os.environ.get("AGENTIC_IDLE_TIMEOUT", "300"))  # 5 minutes idle timeout
-AGENTIC_ABSOLUTE_MAX_TIMEOUT = float(os.environ.get("AGENTIC_ABSOLUTE_MAX_TIMEOUT", "900"))  # 15 minutes absolute max
+# Timeout configuration - Intelligent termination approach
+# IDLE_TIMEOUT: How long to wait without receiving any chunks (resets when chunks arrive)
+# No absolute max - sessions continue as long as progress is being made
+AGENTIC_IDLE_TIMEOUT = float(os.environ.get("AGENTIC_IDLE_TIMEOUT", "600"))  # 10 minutes idle timeout
+# Legacy variable support - ignored if set
+AGENTIC_ABSOLUTE_MAX_TIMEOUT = float(os.environ.get("AGENTIC_ABSOLUTE_MAX_TIMEOUT", "0"))  # 0 = disabled
 
 
 @dataclass
@@ -73,14 +74,14 @@ class BrokerStreamingClient:
         """
         Stream chunks for a job via Server-Sent Events.
 
-        Uses dual timeout strategy:
+        Uses intelligent termination:
         - Idle timeout: How long to wait without receiving chunks (resets when chunks arrive)
-        - Absolute timeout: Hard upper limit on total session duration as safety valve
+        - No absolute timeout: Sessions continue indefinitely as long as progress is made
 
         Args:
             job_id: The job ID to stream
             idle_timeout: Maximum idle time without chunks before timeout (resets on chunk receipt)
-            absolute_timeout: Maximum total time to wait regardless of activity
+            absolute_timeout: Maximum total time (0 or negative = disabled, no absolute limit)
 
         Yields:
             JobChunk objects as they arrive
@@ -95,8 +96,10 @@ class BrokerStreamingClient:
         last_chunk_time = start_time
 
         try:
-            # Use absolute timeout for the HTTP client, but we'll check idle timeout manually
-            timeout_obj = aiohttp.ClientTimeout(total=absolute_timeout)
+            # Use a long timeout for the HTTP client (disabled if absolute_timeout <= 0)
+            # We'll manually check for idle timeout
+            client_timeout = absolute_timeout if absolute_timeout > 0 else None
+            timeout_obj = aiohttp.ClientTimeout(total=client_timeout)
             async with aiohttp.ClientSession(timeout=timeout_obj) as session:
                 async with session.get(url, headers=self._headers()) as response:
                     if response.status != 200:
@@ -146,12 +149,13 @@ class BrokerStreamingClient:
                             pass
 
         except asyncio.TimeoutError:
-            # Check if this was idle timeout or absolute timeout
+            # Check if this was idle timeout (no chunks received)
             total_elapsed = asyncio.get_event_loop().time() - start_time
             idle_elapsed = asyncio.get_event_loop().time() - last_chunk_time
             if idle_elapsed > idle_timeout:
-                logger.warning(f"Stream idle timeout for job {job_id} - no chunks for {idle_elapsed:.1f}s")
-            elif total_elapsed > absolute_timeout:
+                logger.warning(f"Stream idle timeout for job {job_id} - no chunks for {idle_elapsed:.1f}s. "
+                               f"Runner may be stuck or crashed.")
+            elif absolute_timeout > 0 and total_elapsed > absolute_timeout:
                 logger.warning(f"Stream absolute timeout for job {job_id} after {total_elapsed:.1f}s")
             else:
                 logger.warning(f"Stream timeout for job {job_id} (total: {total_elapsed:.1f}s, idle: {idle_elapsed:.1f}s)")
@@ -170,9 +174,10 @@ class BrokerStreamingClient:
         """
         Poll for chunks via HTTP polling (fallback when SSE is not available).
 
-        Uses dual timeout strategy:
+        Uses intelligent termination:
         - Idle timeout: How long to wait without receiving chunks (resets when chunks arrive)
-        - Absolute timeout: Hard upper limit on total session duration as safety valve
+        - No absolute timeout: Sessions continue indefinitely as long as progress is made
+        - Stuck detection: Detects loops, repeated failures, or no-progress patterns
 
         Args:
             job_id: The job ID to poll
@@ -180,7 +185,7 @@ class BrokerStreamingClient:
             chunk_type: Filter by chunk type
             poll_interval: Seconds between polls
             idle_timeout: Maximum idle time without chunks before timeout (resets on chunk receipt)
-            absolute_timeout: Maximum total time to poll regardless of activity
+            absolute_timeout: Maximum total time (0 or negative = disabled, no absolute limit)
 
         Yields:
             JobChunk objects as they arrive
@@ -202,6 +207,13 @@ class BrokerStreamingClient:
         warning_interval = 10  # Initial: warn every 10 seconds
         last_warning_time = start_time
         last_chunk_time = start_time
+
+        # Intelligent stuck detection state
+        consecutive_failures = 0
+        last_tool_result = None
+        duplicate_count = 0
+        steps_without_progress = 0
+        last_step_number = 0
 
         not_found_attempts = 0
         while True:
@@ -270,21 +282,52 @@ class BrokerStreamingClient:
                                 else:
                                     logger.debug(f"Job {job_id} not visible in jobs table yet, continuing to poll...")
 
-                # Check timeouts using dual strategy:
-                # 1. Idle timeout - reset whenever we receive chunks (allows long-running active jobs)
-                # 2. Absolute timeout - hard ceiling as safety valve
+                # Intelligent termination logic
                 elapsed_total = asyncio.get_event_loop().time() - start_time
                 elapsed_since_chunk = asyncio.get_event_loop().time() - last_chunk_time
 
+                # 1. Idle timeout - only trigger if no chunks/heartbeats received
                 if elapsed_since_chunk > idle_timeout:
                     logger.warning(f"Idle timeout for job {job_id} - no chunks for {elapsed_since_chunk:.1f}s. "
-                                   f"Total time: {elapsed_total:.1f}s, chunks received: {chunks_received}")
+                                   f"Total time: {elapsed_total:.1f}s, chunks received: {chunks_received}. "
+                                   f"Runner may be stuck or crashed.")
                     return
 
-                if elapsed_total > absolute_timeout:
+                # 2. Absolute timeout - only if explicitly enabled (> 0)
+                if absolute_timeout > 0 and elapsed_total > absolute_timeout:
                     logger.warning(f"Absolute timeout for job {job_id} after {elapsed_total:.1f}s (max: {absolute_timeout}s). "
                                    f"Chunks received: {chunks_received}")
                     return
+
+                # Track chunks for intelligent stuck detection
+                for chunk in chunks:
+                    if chunk.chunk_type == "tool_result":
+                        metadata = chunk.metadata or {}
+                        success = metadata.get("success", True)
+                        
+                        # Track consecutive failures
+                        if not success:
+                            consecutive_failures += 1
+                            if consecutive_failures >= 5:
+                                logger.warning(f"Intelligent termination: {consecutive_failures} consecutive failures for job {job_id}")
+                                return
+                        else:
+                            consecutive_failures = 0
+                            steps_without_progress = 0
+
+                    elif chunk.chunk_type == "thinking":
+                        # Check for step progression
+                        metadata = chunk.metadata or {}
+                        step = metadata.get("step", 0)
+                        if step == last_step_number:
+                            steps_without_progress += 1
+                            # If no step progress for 20 chunks, might be stuck in a loop
+                            if steps_without_progress > 20:
+                                logger.warning(f"Intelligent termination: No step progress for {steps_without_progress} chunks (stuck at step {step})")
+                                return
+                        else:
+                            last_step_number = step
+                            steps_without_progress = 0
 
                 # Dynamically adjust warning interval based on operation duration
                 # and time since last chunk (long gaps are normal during LLM inference)

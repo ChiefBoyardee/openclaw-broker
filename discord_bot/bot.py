@@ -83,9 +83,11 @@ CONVERSATION_TIMEOUT_MINUTES = float(os.environ.get("CONVERSATION_TIMEOUT_MINUTE
 # --- Agentic Mode Config ---
 AGENTIC_MODE = os.environ.get("AGENTIC_MODE", "true").lower() in ("true", "1", "yes")
 AGENTIC_AUTO_TRIGGER = os.environ.get("AGENTIC_AUTO_TRIGGER", "true").lower() in ("true", "1", "yes")
-# Absolute max timeout as safety valve - the streaming client's idle timeout (300s)
-# resets on every chunk/heartbeat and is the primary timeout mechanism
-AGENTIC_MAX_STREAM_WAIT = float(os.environ.get("AGENTIC_MAX_STREAM_WAIT", "1800"))
+# Intelligent termination: No hard timeouts - relies on idle detection and stuck-loop detection
+# AGENTIC_IDLE_TIMEOUT (default: 600s) controls max time without chunks/heartbeats
+# Sessions run indefinitely as long as progress is being made
+# This value is a legacy safety valve - streaming client's intelligent detection is primary
+AGENTIC_MAX_STREAM_WAIT = float(os.environ.get("AGENTIC_MAX_STREAM_WAIT", "1800"))  # 30 min max as safety valve
 AGENTIC_DEFAULT_MAX_STEPS = int(os.environ.get("AGENTIC_DEFAULT_MAX_STEPS", "25"))
 
 MAX_DISPLAY_LEN = 1500
@@ -1269,12 +1271,19 @@ async def handle_agentic_command(message: discord.Message, prompt: str):
 
         # Show typing indicator while processing
         async with message.channel.typing():
-            # Start the session - timeouts are handled by the streaming client's
-            # dual timeout strategy (idle timeout resets on heartbeats, absolute timeout as safety valve)
-            final_result = await session.start(
-                prompt=prompt,
-                conversation_history=conversation_history,
-            )
+            # Start the session - relies on streaming client's intelligent termination
+            # Detects: idle timeout (no chunks), stuck loops, repeated failures
+            # No hard time limit - runs as long as progress is being made
+            try:
+                final_result = await session.start(
+                    prompt=prompt,
+                    conversation_history=conversation_history,
+                )
+            except Exception as e:
+                logger.exception(f"Agentic session failed: {e}")
+                final_result = None
+                await status_msg.edit(content=f"❌ Agentic session failed: {str(e)[:200]}")
+                return
 
         if final_result:
             # Store in memory if enabled
