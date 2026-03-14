@@ -114,6 +114,30 @@ for BOT_DIR in /opt/openclaw-bot-*; do
         
         run_sudo chown -R openclaw:openclaw "$BOT_DIR/discord_bot" "$BOT_DIR/requirements.txt"
         
+        # Clean up old timeout environment variables (replaced by intelligent termination)
+        if [[ -f "$BOT_DIR/bot.env" ]]; then
+            # Remove or comment out old hard timeout variables that conflict with new intelligent termination
+            if grep -qE "^AGENTIC_MAX_STREAM_WAIT=|^AGENTIC_IDLE_TIMEOUT=|^AGENTIC_ABSOLUTE_MAX_TIMEOUT=" "$BOT_DIR/bot.env"; then
+                echo "  -> Migrating bot.env: Removing old hard timeout variables (now uses intelligent termination)..."
+                # Create backup
+                run_sudo cp "$BOT_DIR/bot.env" "$BOT_DIR/bot.env.backup.$(date +%Y%m%d%H%M%S)"
+                # Comment out old timeout lines and add explanatory comment
+                run_sudo sed -i 's/^AGENTIC_MAX_STREAM_WAIT=/# Removed: AGENTIC_MAX_STREAM_WAIT (replaced by intelligent termination)
+# AGENTIC_MAX_STREAM_WAIT=/g' "$BOT_DIR/bot.env"
+                run_sudo sed -i 's/^AGENTIC_IDLE_TIMEOUT=/# Removed: AGENTIC_IDLE_TIMEOUT (replaced by intelligent termination)
+# AGENTIC_IDLE_TIMEOUT=/g' "$BOT_DIR/bot.env"
+                run_sudo sed -i 's/^AGENTIC_ABSOLUTE_MAX_TIMEOUT=/# Removed: AGENTIC_ABSOLUTE_MAX_TIMEOUT (replaced by intelligent termination)
+# AGENTIC_ABSOLUTE_MAX_TIMEOUT=/g' "$BOT_DIR/bot.env"
+                # Add comment about new behavior if not already present
+                if ! grep -q "Intelligent termination" "$BOT_DIR/bot.env"; then
+                    run_sudo bash -c "echo '' >> '$BOT_DIR/bot.env'"
+                    run_sudo bash -c "echo '# Intelligent termination: Hard timeouts removed as of March 2025' >> '$BOT_DIR/bot.env'"
+                    run_sudo bash -c "echo '# Sessions now use idle detection (10min without chunks) and stuck-loop detection' >> '$BOT_DIR/bot.env'"
+                    run_sudo bash -c "echo '# This allows long-running tasks while still detecting crashed runners' >> '$BOT_DIR/bot.env'"
+                fi
+            fi
+        fi
+        
         echo "  -> Updating bot dependencies..."
         if [[ $EUID -eq 0 ]]; then
             runuser -u openclaw -- "$BOT_DIR/venv/bin/pip" install -r "$BOT_DIR/requirements.txt"
