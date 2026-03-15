@@ -35,9 +35,10 @@ class AgenticConfig:
     max_steps: int = 25
     enable_thinking_display: bool = True
     enable_progress_updates: bool = True
-    # Use 900s absolute max to allow for long-running multi-step tasks
-    # The streaming client's idle timeout (300s) will reset when chunks/heartbeats are received
-    max_stream_wait: float = 900.0
+    # Idle-based termination is primary: stream runs as long as heartbeats arrive.
+    # max_stream_wait is a safety ceiling for the outer SSE connection only.
+    # Set high (3600s = 1h) to avoid cutting off genuinely long multi-step tasks.
+    max_stream_wait: float = 3600.0
     tool_timeout: float = 60.0
     poll_interval: float = 1.0
     use_sse: bool = True  # Use SSE if available, otherwise polling

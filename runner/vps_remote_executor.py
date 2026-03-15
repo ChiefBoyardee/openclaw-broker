@@ -31,7 +31,7 @@ VPS_HOST = os.environ.get("VPS_HOST", "")
 VPS_USER = os.environ.get("VPS_USER", "openclaw")
 VPS_SSH_KEY_PATH = os.environ.get("VPS_SSH_KEY_PATH", "")
 VPS_SSH_PORT = int(os.environ.get("VPS_SSH_PORT", "22"))
-VPS_CMD_TIMEOUT = int(os.environ.get("VPS_CMD_TIMEOUT", "60"))
+VPS_CMD_TIMEOUT = int(os.environ.get("VPS_CMD_TIMEOUT", "120"))
 VPS_MAX_OUTPUT_BYTES = int(os.environ.get("VPS_MAX_OUTPUT_BYTES", "50000"))
 
 # Allowed commands on VPS (security allowlist)
@@ -268,10 +268,10 @@ def execute_on_vps(
         stdout = result.stdout or ""
         stderr = result.stderr or ""
 
-        # Truncate output if too large
+        # Truncate output if too large (stdout is already a str from text=True)
         truncated = False
         if len(stdout.encode("utf-8")) > VPS_MAX_OUTPUT_BYTES:
-            stdout = stdout[:VPS_MAX_OUTPUT_BYTES].decode("utf-8", errors="ignore")
+            stdout = stdout.encode("utf-8")[:VPS_MAX_OUTPUT_BYTES].decode("utf-8", errors="ignore")
             truncated = True
 
         success = result.returncode == 0
