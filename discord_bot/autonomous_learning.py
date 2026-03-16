@@ -13,10 +13,8 @@ from __future__ import annotations
 
 import json
 import re
-import asyncio
 from typing import List, Dict, Optional, Any
 from dataclasses import dataclass
-from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
@@ -240,7 +238,7 @@ class AutonomousLearning:
         
         # Record interests
         for topic in analysis['extracted_topics']:
-            interest_id = self_memory.add_or_update_interest(
+            _interest_id = self_memory.add_or_update_interest(
                 topic=topic['topic'],
                 category=topic['category'],
                 level_delta=0.1,
@@ -253,7 +251,7 @@ class AutonomousLearning:
         
         # Record facts
         for fact in analysis['suggested_facts']:
-            fact_id = self_memory.add_learned_fact(
+            _fact_id = self_memory.add_learned_fact(
                 content=fact['content'],
                 source_type=fact['source_type'],
                 source_ref=fact['source_ref'],
@@ -273,7 +271,7 @@ class AutonomousLearning:
         # Record reflections
         for reflection in analysis['potential_reflections']:
             # Generate a reflection based on the trigger
-            reflection_id = self_memory.add_reflection(
+            _reflection_id = self_memory.add_reflection(
                 trigger=reflection['trigger'],
                 content=f"A conversation sparked new thoughts about {reflection['category']}.",
                 importance=1.2,

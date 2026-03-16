@@ -9,16 +9,14 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 import logging
 import threading
-import time
 from typing import Any, Optional
-
-logger = logging.getLogger(__name__)
 
 from runner.llm_client import chat_with_tools, _strip_think_blocks
 from runner.tool_registry import dispatch, get_tools_schema, parse_tool_args, get_cli_tool_schema, cli_dispatch
+
+logger = logging.getLogger(__name__)
 
 # Default truncate tool output for audit (bytes) — overridden by config
 TOOL_OUTPUT_MAX_BYTES = 8000
@@ -338,6 +336,10 @@ def run_llm_tool_loop(
             else:
                 messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": truncated_result})
 
+        # If policy limit was reached inside the tool loop, stop the outer loop too
+        if final_text is not None:
+            break
+
         # When fallback parser was used, inject results as plain-text user message
         if fallback_parsed and tool_results_text:
             results_block = "\n\n".join(tool_results_text)
@@ -388,7 +390,6 @@ def run_llm_tool_loop_streaming(
 
     When cli_mode=True, uses a single run(command="...") tool with CLI-style routing.
     """
-    from runner.streaming_client import ChunkType
 
     # Select tool schema based on mode
     if cli_mode:
@@ -419,7 +420,7 @@ def run_llm_tool_loop_streaming(
         time.sleep(0.2)
         # Verify job is visible, retry if needed
         if not stream_client.verify_job_visible(max_retries=5, initial_delay=0.2):
-            logger.warning(f"Could not verify job visibility, attempting to post anyway...")
+            logger.warning("Could not verify job visibility, attempting to post anyway...")
 
     # Build system content (same logic as non-streaming)
     has_rich_persona = False
@@ -782,7 +783,7 @@ def run_llm_tool_loop_streaming(
     finally:
         # Stop the continuous heartbeat thread when job completes
         if heartbeat_thread:
-            logger.info(f"Stopping heartbeat thread")
+            logger.info("Stopping heartbeat thread")
             stop_heartbeat.set()
             heartbeat_thread.join(timeout=2)
 

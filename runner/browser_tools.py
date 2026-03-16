@@ -13,9 +13,8 @@ from __future__ import annotations
 
 import json
 import os
-import re
 from typing import Any, Optional, Dict, List
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 
 # Browser configuration
 BROWSER_HEADLESS = os.environ.get("BROWSER_HEADLESS", "true").lower() == "true"
@@ -410,7 +409,7 @@ def browser_type(text: str, ref: Optional[int] = None,
         
         if ref is not None:
             # Type by reference
-            input_selector = f"input, textarea, select"
+            input_selector = "input, textarea, select"
             elements = page.query_selector_all(input_selector)
             if ref >= len(elements):
                 return json.dumps({

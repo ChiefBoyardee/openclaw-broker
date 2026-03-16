@@ -276,7 +276,7 @@ class NaturalLanguageRouter:
                 )
 
         # Default to casual_chat with low confidence
-        logger.debug(f"No specific intent detected, defaulting to casual_chat")
+        logger.debug("No specific intent detected, defaulting to casual_chat")
         return IntentResult(
             intent="casual_chat",
             confidence=0.3,

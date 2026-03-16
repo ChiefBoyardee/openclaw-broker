@@ -12,7 +12,7 @@ import os
 import sqlite3
 import sys
 import time
-from typing import Any, AsyncGenerator, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 

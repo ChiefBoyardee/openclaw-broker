@@ -7,12 +7,11 @@ the personality's characteristics.
 """
 from __future__ import annotations
 
-import json
 import html
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-from runner.website_config import WebsiteConfig, WebsiteTheme
+from runner.website_config import WebsiteConfig
 
 
 class PersonalityTemplateEngine:
@@ -642,7 +641,7 @@ pre code {
                 if timestamp:
                     try:
                         date_str = f'<span class="item-meta">{html.escape(str(timestamp))}</span>'
-                    except:
+                    except Exception:
                         pass
                 
                 reflections_html.append(f'''

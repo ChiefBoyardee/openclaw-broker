@@ -14,6 +14,8 @@ import time
 import uuid
 import logging
 
+from typing import Optional
+
 import requests
 
 from runner.llm_config import get_llm_config
@@ -620,29 +622,37 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
             logger.info(f"Streaming mode enabled for job {job_id_for_streaming}")
 
         # Bridge for tool_registry.dispatch: methods + allowed_tools, worker_id
-        # Import browser tools
+        # Import browser tools (prefixed to avoid name clash with _Bridge methods)
         from runner.browser_tools import (
-            browser_navigate, browser_snapshot, browser_click, browser_type,
-            browser_search, browser_extract_article, browser_close,
+            browser_navigate as _browser_navigate, browser_snapshot as _browser_snapshot,
+            browser_click as _browser_click, browser_type as _browser_type,
+            browser_search as _browser_search, browser_extract_article as _browser_extract_article,
+            browser_close as _browser_close,
             get_browser_capabilities
         )
-        # Import GitHub tools
+        # Import GitHub tools (prefixed to avoid name clash with _Bridge methods)
         from runner.github_tools import (
-            github_create_repo, github_list_repos, github_create_issue, github_list_issues,
-            github_read_file, github_write_file, github_search_repos, github_search_code,
-            github_get_user, get_github_capabilities
+            github_create_repo as _github_create_repo, github_list_repos as _github_list_repos,
+            github_create_issue as _github_create_issue, github_list_issues as _github_list_issues,
+            github_read_file as _github_read_file, github_write_file as _github_write_file,
+            github_search_repos as _github_search_repos, github_search_code as _github_search_code,
+            github_get_user as _github_get_user, get_github_capabilities
         )
-        # Import VPS website tools
+        # Import VPS website tools (prefixed to avoid name clash with _Bridge methods)
         from runner.vps_website_tools import (
-            website_init, website_write_file, website_read_file, website_list_files,
-            website_create_post, website_create_knowledge_page, website_update_about,
-            website_get_stats, get_vps_website_capabilities
+            website_init as _website_init, website_write_file as _website_write_file,
+            website_read_file as _website_read_file, website_list_files as _website_list_files,
+            website_create_post as _website_create_post,
+            website_create_knowledge_page as _website_create_knowledge_page,
+            website_update_about as _website_update_about,
+            website_get_stats as _website_get_stats, get_vps_website_capabilities
         )
-        # Import Nginx configurator
+        # Import Nginx configurator (prefixed to avoid name clash with _Bridge methods)
         from runner.nginx_configurator import (
-            nginx_generate_config, nginx_install_config, nginx_enable_site,
-            nginx_disable_site, nginx_remove_config, nginx_test_config,
-            nginx_reload, nginx_get_status, get_nginx_capabilities
+            nginx_generate_config as _nginx_generate_config, nginx_install_config as _nginx_install_config,
+            nginx_enable_site as _nginx_enable_site, nginx_disable_site as _nginx_disable_site,
+            nginx_remove_config as _nginx_remove_config, nginx_test_config as _nginx_test_config,
+            nginx_reload as _nginx_reload, nginx_get_status as _nginx_get_status, get_nginx_capabilities
         )
 
         class _Bridge:
@@ -664,74 +674,74 @@ def run_job(command: str, payload: str, job_id: str = "") -> str:
                 return _approve_echo_impl(plan_id)
             # Browser tools
             def browser_navigate(_self, url: str, wait_for_load: bool = True):
-                return browser_navigate(url, wait_for_load)
+                return _browser_navigate(url, wait_for_load)
             def browser_snapshot(_self, full_content: bool = True):
-                return browser_snapshot(full_content)
+                return _browser_snapshot(full_content)
             def browser_click(_self, ref: Optional[int] = None, selector: Optional[str] = None):
-                return browser_click(ref, selector)
+                return _browser_click(ref, selector)
             def browser_type(_self, text: str, ref: Optional[int] = None, selector: Optional[str] = None, submit: bool = False):
-                return browser_type(text, ref, selector, submit)
+                return _browser_type(text, ref, selector, submit)
             def browser_search(_self, query: str, engine: str = "google"):
-                return browser_search(query, engine)
+                return _browser_search(query, engine)
             def browser_extract_article(_self):
-                return browser_extract_article()
+                return _browser_extract_article()
             def browser_close(_self):
-                return browser_close()
+                return _browser_close()
             # GitHub tools
             def github_create_repo(_self, name: str, description: str = "", private: bool = False,
                                   auto_init: bool = True, gitignore_template: str = ""):
-                return github_create_repo(name, description, private, auto_init, gitignore_template)
+                return _github_create_repo(name, description, private, auto_init, gitignore_template)
             def github_list_repos(_self, type_filter: str = "owner", sort: str = "updated", limit: int = 30):
-                return github_list_repos(type_filter, sort, limit)
+                return _github_list_repos(type_filter, sort, limit)
             def github_create_issue(_self, repo: str, title: str, body: str = "", labels: Optional[list] = None):
-                return github_create_issue(repo, title, body, labels)
+                return _github_create_issue(repo, title, body, labels)
             def github_list_issues(_self, repo: str, state: str = "open", limit: int = 30):
-                return github_list_issues(repo, state, limit)
+                return _github_list_issues(repo, state, limit)
             def github_read_file(_self, repo: str, path: str, ref: str = "main"):
-                return github_read_file(repo, path, ref)
+                return _github_read_file(repo, path, ref)
             def github_write_file(_self, repo: str, path: str, content: str, message: str,
                                  branch: str = "main", sha: Optional[str] = None):
-                return github_write_file(repo, path, content, message, branch, sha)
+                return _github_write_file(repo, path, content, message, branch, sha)
             def github_search_repos(_self, query: str, sort: str = "stars", order: str = "desc", limit: int = 30):
-                return github_search_repos(query, sort, order, limit)
+                return _github_search_repos(query, sort, order, limit)
             def github_search_code(_self, query: str, limit: int = 30):
-                return github_search_code(query, limit)
+                return _github_search_code(query, limit)
             def github_get_user(_self, username: Optional[str] = None):
-                return github_get_user(username)
+                return _github_get_user(username)
             # VPS Website tools
             def website_init(_self, site_title: str = "Urgo's Digital Garden", description: str = "A collection of thoughts, learnings, and discoveries."):
-                return website_init(site_title, description)
+                return _website_init(site_title, description)
             def website_write_file(_self, path: str, content: str, append: bool = False):
-                return website_write_file(path, content, append)
+                return _website_write_file(path, content, append)
             def website_read_file(_self, path: str):
-                return website_read_file(path)
+                return _website_read_file(path)
             def website_list_files(_self, directory: str = "", recursive: bool = False):
-                return website_list_files(directory, recursive)
+                return _website_list_files(directory, recursive)
             def website_create_post(_self, title: str, content: str, category: str = "general", tags: Optional[list] = None):
-                return website_create_post(title, content, category, tags)
+                return _website_create_post(title, content, category, tags)
             def website_create_knowledge_page(_self, title: str, content: str, category: str = "general", source: Optional[str] = None):
-                return website_create_knowledge_page(title, content, category, source)
+                return _website_create_knowledge_page(title, content, category, source)
             def website_update_about(_self, biography: Optional[str] = None, interests: Optional[list] = None, current_goals: Optional[list] = None):
-                return website_update_about(biography, interests, current_goals)
+                return _website_update_about(biography, interests, current_goals)
             def website_get_stats(_self):
-                return website_get_stats()
+                return _website_get_stats()
             # Nginx Management tools
             def nginx_generate_config(_self, domain: str, web_root: str, ssl_cert: Optional[str] = None, ssl_key: Optional[str] = None, enable_http2: bool = True, rate_limit_zone: str = "ai_site", rate_limit_rps: int = 10, rate_limit_burst: int = 20):
-                return nginx_generate_config(domain, web_root, ssl_cert, ssl_key, enable_http2, rate_limit_zone, rate_limit_rps, rate_limit_burst)
+                return _nginx_generate_config(domain, web_root, ssl_cert, ssl_key, enable_http2, rate_limit_zone, rate_limit_rps, rate_limit_burst)
             def nginx_install_config(_self, domain: str, config_content: str, enable: bool = True):
-                return nginx_install_config(domain, config_content, enable)
+                return _nginx_install_config(domain, config_content, enable)
             def nginx_enable_site(_self, domain: str):
-                return nginx_enable_site(domain)
+                return _nginx_enable_site(domain)
             def nginx_disable_site(_self, domain: str):
-                return nginx_disable_site(domain)
+                return _nginx_disable_site(domain)
             def nginx_remove_config(_self, domain: str):
-                return nginx_remove_config(domain)
+                return _nginx_remove_config(domain)
             def nginx_test_config(_self):
-                return nginx_test_config()
+                return _nginx_test_config()
             def nginx_reload(_self):
-                return nginx_reload()
+                return _nginx_reload()
             def nginx_get_status(_self):
-                return nginx_get_status()
+                return _nginx_get_status()
             # VPS Remote execution tools
             def vps_remote_exec(_self, command: str, timeout: Optional[int] = None):
                 from runner.vps_remote_executor import execute_on_vps

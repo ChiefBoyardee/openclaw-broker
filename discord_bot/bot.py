@@ -5,7 +5,6 @@ Commands: ping, capabilities, plan, approve, status, repos, repostat, last, grep
 Guardrails: cooldown, max concurrent.
 """
 
-import asyncio
 import json
 import logging
 import os
@@ -38,13 +37,11 @@ try:
     from .memory import get_memory
     from .self_memory import get_self_memory
     from .personality import get_personality_engine
-    from .natural_language_router import detect_intent, IntentResult
+    from .natural_language_router import detect_intent
     from .agentic_session import (
-        AgenticSession,
         AgenticConfig,
         get_agentic_manager,
     )
-    from .streaming_client import get_streaming_client
     HAS_CONVERSATION_FEATURES = True
     HAS_NL_ROUTER = True
     HAS_AGENTIC_MODE = True

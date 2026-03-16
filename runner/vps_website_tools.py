@@ -14,9 +14,8 @@ import html
 import json
 import os
 import re
-from typing import Any, Optional, Dict, List
+from typing import Optional, Dict, List
 from datetime import datetime
-from pathlib import Path
 
 # Configuration
 VPS_WEBSITE_BASE = os.environ.get("VPS_WEBSITE_BASE", "/var/www/urgo")

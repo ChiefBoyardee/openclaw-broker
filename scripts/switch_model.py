@@ -386,7 +386,7 @@ def update_environment(
     server_vars["LLAMA_MODEL"] = model_filename
 
     if dry_run:
-        print(color(f"[DRY RUN] Would update server.env:", Colors.YELLOW))
+        print(color("[DRY RUN] Would update server.env:", Colors.YELLOW))
         print(color(f"  LLAMA_MODEL: {old_model} -> {model_filename}", Colors.YELLOW))
     else:
         write_env_file(server_env_path, server_vars)
@@ -399,7 +399,7 @@ def update_environment(
         runner_vars["LLM_MODEL"] = model_filename
 
         if dry_run:
-            print(color(f"[DRY RUN] Would update runner.env:", Colors.YELLOW))
+            print(color("[DRY RUN] Would update runner.env:", Colors.YELLOW))
             print(color(f"  LLM_MODEL: {old_runner_model} -> {model_filename}", Colors.YELLOW))
         else:
             write_env_file(runner_env_path, runner_vars)
@@ -494,7 +494,7 @@ Examples:
         print(color("Error: Could not find server.env. Please specify --server-env", Colors.RED))
         print("Searched in:")
         print(f"  {Path.home() / '.local' / 'llama-cpp-server' / 'server.env'}")
-        print(f"  /opt/llama-cpp-server/server.env")
+        print("  /opt/llama-cpp-server/server.env")
         sys.exit(1)
 
     print(color(f"Using server.env: {server_env_path}", Colors.DIM))
@@ -582,7 +582,7 @@ Examples:
         print("Next steps:")
         print(f"  1. Test the server: {server_env_path.parent / 'test-server.sh'}")
         if runner_env_path:
-            print(f"  2. Restart the runner if needed")
+            print("  2. Restart the runner if needed")
     print(color("=" * 60, Colors.BOLD + Colors.GREEN))
 
 

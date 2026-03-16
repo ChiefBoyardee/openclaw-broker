@@ -16,6 +16,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from runner import browser_tools as bt
 
+# Skip the entire module when Playwright is not installed
+try:
+    import playwright  # noqa: F401
+    _PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    _PLAYWRIGHT_AVAILABLE = False
+
+pytestmark = pytest.mark.skipif(
+    not _PLAYWRIGHT_AVAILABLE,
+    reason="Playwright not installed (pip install playwright && playwright install chromium)",
+)
+
 # Port for our local test server
 TEST_PORT = 8089
 TEST_HTML = """

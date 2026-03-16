@@ -10,9 +10,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Set
 
 import discord
@@ -20,7 +19,6 @@ import discord
 from discord_bot.streaming_client import (
     BrokerStreamingClient,
     JobChunk,
-    ToolCallRequest,
     get_streaming_client,
 )
 
@@ -344,7 +342,6 @@ class AgenticSession:
 
     async def _handle_chunk(self, chunk: JobChunk) -> None:
         """Handle a single chunk from the stream."""
-        from discord_bot.streaming_client import JobChunk as JC
 
         chunk_handlers = {
             "thinking": self._handle_thinking,
@@ -632,7 +629,7 @@ class AgenticSession:
 
         logger.info(f"Starting to poll for follow-up job {followup_job_id}")
 
-        await self._send_message(f"⏳ Continuing work in follow-up job...")
+        await self._send_message("⏳ Continuing work in follow-up job...")
 
         try:
             while waited < max_wait:
@@ -649,7 +646,7 @@ class AgenticSession:
                                 # Job is complete, get the result
                                 result = data.get("result", "")
                                 logger.info(f"Follow-up job {followup_job_id} completed")
-                                await self._send_message(f"✅ Follow-up work complete!")
+                                await self._send_message("✅ Follow-up work complete!")
                                 if result:
                                     # Try to parse and extract just the final result
                                     try:
@@ -734,7 +731,7 @@ class AgenticSession:
         # Format the status message
         status_lines = [
             "🤔 **Working on your request...**",
-            f"",
+            "",
             f"⏱️ Elapsed: {elapsed:.1f}s | 📝 Tokens: {self.tokens_generated} ({tokens_per_sec:.1f}/s)",
             f"🔄 Step: {self.current_step}/{self.total_steps} [{bar}] {progress:.0f}%",
         ]

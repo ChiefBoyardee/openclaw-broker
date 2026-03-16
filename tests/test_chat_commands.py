@@ -64,7 +64,7 @@ def test_handle_empty_message(chat_manager):
     
     async def _run():
         reply_mock = AsyncMock()
-        res = await chat_manager.handle_chat_message("", "123", "456", "TestUser", reply_mock)
+        _res = await chat_manager.handle_chat_message("", "123", "456", "TestUser", reply_mock)
         # The personality or LLM call will probably still trigger if it reaches here,
         # but the prompt might be empty. Let's just make sure it doesn't crash.
         # Although actually bot.py filters empty messages before ChatManager sees them.

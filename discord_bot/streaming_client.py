@@ -12,7 +12,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import Any, AsyncGenerator, Callable, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, Optional
 
 import aiohttp
 
@@ -107,7 +107,7 @@ class BrokerStreamingClient:
                         return
 
                     # Process SSE stream
-                    buffer = ""
+                    _buffer = ""  # noqa: F841 — reserved for future SSE line buffering
                     async for line in response.content:
                         try:
                             line = line.decode("utf-8")
@@ -210,8 +210,8 @@ class BrokerStreamingClient:
 
         # Intelligent stuck detection state
         consecutive_failures = 0
-        last_tool_result = None
-        duplicate_count = 0
+        _last_tool_result = None
+        _duplicate_count = 0
         steps_without_progress = 0
         last_step_number = 0
 

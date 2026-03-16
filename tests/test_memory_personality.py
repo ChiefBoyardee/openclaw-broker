@@ -171,7 +171,7 @@ def test_memory_sql_comment_syntax():
 
         if hasattr(mem, 'semantic_search'):
             try:
-                results = mem.semantic_search(conv_id, "test", k=5)
+                _results = mem.semantic_search(conv_id, "test", k=5)
             except Exception as e:
                 assert "near \"#\"" not in str(e), f"SQL comment syntax bug: {e}"
         mem.db.close()

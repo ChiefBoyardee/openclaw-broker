@@ -609,10 +609,10 @@ class ChatManager:
         if enable_tools and intent_result:
             tool_descriptions = self._get_tool_descriptions_for_intent(intent_result.intent)
             if tool_descriptions:
-                system_prompt += f"\n\n=== AVAILABLE TOOLS ===\n"
+                system_prompt += "\n\n=== AVAILABLE TOOLS ===\n"
                 system_prompt += f"You have access to these tools for this request:\n{tool_descriptions}\n"
-                system_prompt += f"\nWhen the user's request requires information or actions beyond your knowledge, "
-                system_prompt += f"use the appropriate tool. The tool results will be provided to help you respond."
+                system_prompt += "\nWhen the user's request requires information or actions beyond your knowledge, "
+                system_prompt += "use the appropriate tool. The tool results will be provided to help you respond."
                 logger.info(f"Enabled tools for intent '{intent_result.intent}': {intent_result.suggested_tools}")
 
         messages.append({"role": "system", "content": system_prompt})
@@ -1061,7 +1061,7 @@ class ChatManager:
                     target_conv_id = convs[conv_num - 1]['full_id']
                     target_title = convs[conv_num - 1]['title']
                 else:
-                    return f"❌ Invalid conversation number."
+                    return "❌ Invalid conversation number."
             except ValueError:
                 target_conv_id = args.strip()
                 target_title = target_conv_id[:20] + "..."
@@ -1420,7 +1420,7 @@ async def handle_website_command(bot, message, args: str):
                 pages = results.get("pages_regenerated", [])
                 errors = results.get("errors", [])
                 
-                response = f"🌐 **Website regenerated!**\n\n"
+                response = "🌐 **Website regenerated!**\n\n"
                 response += f"**Pages updated:** {len(pages)}\n"
                 if pages:
                     response += "\n".join([f"  • {p}" for p in pages[:10]])
@@ -1428,7 +1428,7 @@ async def handle_website_command(bot, message, args: str):
                         response += f"\n  ... and {len(pages) - 10} more"
                 
                 if errors:
-                    response += f"\n\n⚠️ **Warnings:**\n" + "\n".join([f"  • {e}" for e in errors])
+                    response += "\n\n⚠️ **Warnings:**\n" + "\n".join([f"  • {e}" for e in errors])
                 
                 return response
             else:
@@ -1445,8 +1445,8 @@ async def handle_website_command(bot, message, args: str):
                 counts = data.get("memory_counts", {})
                 pages = data.get("pages_created", [])
                 
-                response = f"🧠 **Memory synced to website!**\n\n"
-                response += f"**Items synced:**\n"
+                response = "🧠 **Memory synced to website!**\n\n"
+                response += "**Items synced:**\n"
                 response += f"  • Reflections: {counts.get('reflections', 0)}\n"
                 response += f"  • Interests: {counts.get('interests', 0)}\n"
                 response += f"  • Goals: {counts.get('goals', 0)}\n"
@@ -1552,7 +1552,7 @@ Path: `{data.get('path', 'css/style.css')}`"""
                 return f"❌ **Theme generation failed:** {data.get('error', 'Unknown error')}"
         
         else:
-            return f"""🌐 **Website Commands**
+            return """🌐 **Website Commands**
 
 `!website init` - Initialize website structure
 `!website status` - Show website statistics

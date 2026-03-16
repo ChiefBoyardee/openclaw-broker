@@ -51,15 +51,13 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from broker.caps import is_command_allowed, job_matches_worker, job_required_caps, parse_worker_caps
-
-logger = logging.getLogger(__name__)
 from broker.streaming import (
     ChunkType,
-    JobChunk,
-    JobToolCall,
     ToolCallStatus,
     get_stream_manager,
 )
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = os.environ.get("BROKER_DB", "/var/lib/openclaw-broker/broker.db")
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")

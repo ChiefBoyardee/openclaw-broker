@@ -312,7 +312,7 @@ class RemoteEmbeddingProvider(EmbeddingProvider):
         self._dimension = self.DIMENSIONS.get(model, 1024)  # Default to 1024 for Qwen
 
         try:
-            import requests
+            import requests as _requests  # noqa: F401 — kept to verify aiohttp/requests available at init time
             logger.info(f"Remote embedding provider initialized ({model} via {broker_url})")
         except ImportError:
             raise ImportError("requests package required. Install: pip install requests")

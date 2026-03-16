@@ -40,9 +40,9 @@ class TestBrokerStreaming:
         manager = JobStreamManager(db_path)
 
         # Add chunks
-        id1 = manager.add_chunk("job-1", "thinking", "Step 1")
-        id2 = manager.add_chunk("job-1", "message", "Hello user")
-        id3 = manager.add_chunk("job-1", "final", "Done")
+        _id1 = manager.add_chunk("job-1", "thinking", "Step 1")
+        _id2 = manager.add_chunk("job-1", "message", "Hello user")
+        _id3 = manager.add_chunk("job-1", "final", "Done")
 
         # Get all chunks
         chunks = manager.get_chunks("job-1")
@@ -59,8 +59,8 @@ class TestBrokerStreaming:
         manager = JobStreamManager(db_path)
 
         id1 = manager.add_chunk("job-1", "thinking", "Step 1")
-        id2 = manager.add_chunk("job-1", "thinking", "Step 2")
-        id3 = manager.add_chunk("job-1", "message", "Result")
+        _id2 = manager.add_chunk("job-1", "thinking", "Step 2")
+        _id3 = manager.add_chunk("job-1", "message", "Result")
 
         # Get chunks after id1
         chunks = manager.get_chunks("job-1", after_id=id1)
@@ -340,17 +340,26 @@ class TestBotStreamingClient:
 
     @patch("aiohttp.ClientSession.get")
     async def test_poll_chunks(self, mock_get):
-        """Test polling for chunks."""
+        """Test polling for chunks — mock returns one chunk then empty to allow idle timeout."""
         from discord_bot.streaming_client import BrokerStreamingClient
+
+        call_count = 0
+
+        async def _json_side_effect():
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                return {
+                    "chunks": [
+                        {"id": 1, "chunk_type": "message", "content": "Hello", "metadata": None, "created_at": 123}
+                    ],
+                    "count": 1,
+                }
+            return {"chunks": [], "count": 0}
 
         mock_response = AsyncMock()
         mock_response.status = 200
-        mock_response.json = AsyncMock(return_value={
-            "chunks": [
-                {"id": 1, "chunk_type": "message", "content": "Hello", "metadata": None, "created_at": 123}
-            ],
-            "count": 1
-        })
+        mock_response.json = _json_side_effect
         mock_get.return_value.__aenter__ = AsyncMock(return_value=mock_response)
         mock_get.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -360,10 +369,11 @@ class TestBotStreamingClient:
         )
         client.enabled = True
         chunks = []
-        async for chunk in client.poll_chunks("job-1", poll_interval=0.1, timeout=1.0):
+        async for chunk in client.poll_chunks("job-1", poll_interval=0.05, idle_timeout=0.3):
             chunks.append(chunk)
 
-        assert len(chunks) >= 0  # May be empty if mock doesn't work as expected
+        assert len(chunks) == 1
+        assert chunks[0].content == "Hello"
 
 
 # Integration test markers

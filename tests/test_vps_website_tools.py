@@ -70,7 +70,7 @@ def test_write_and_read_file():
 def test_create_post_escapes_xss():
     """XSS payloads in title/category/tags are escaped."""
     xss = '<script>alert("xss")</script>'
-    result = json.loads(vwt.website_create_post(
+    _result = json.loads(vwt.website_create_post(
         title=xss,
         content="Safe body text.",
         category=xss,
@@ -91,7 +91,7 @@ def test_create_post_escapes_xss():
 def test_create_knowledge_page_escapes_xss():
     """XSS payloads in knowledge page title/category are escaped."""
     xss = '<img src=x onerror=alert(1)>'
-    result = json.loads(vwt.website_create_knowledge_page(
+    _result = json.loads(vwt.website_create_knowledge_page(
         title=xss,
         content="Safe knowledge content.",
         category=xss,
@@ -112,7 +112,7 @@ def test_create_knowledge_page_escapes_xss():
 def test_update_about_escapes_xss():
     """XSS payloads in about page fields are escaped."""
     xss = '<script>steal()</script>'
-    result = json.loads(vwt.website_update_about(
+    _result = json.loads(vwt.website_update_about(
         biography=xss,
         interests=[xss],
         current_goals=[xss],

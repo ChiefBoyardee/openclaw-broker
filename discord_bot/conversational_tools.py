@@ -7,7 +7,6 @@ in a way that fits Urgo's personality and maintains conversation flow.
 """
 
 import json
-import re
 from typing import Dict, Any, Optional, List
 import logging
 
@@ -188,7 +187,7 @@ class ConversationalToolFormatter:
         if len(by_file) > 10:
             lines.append(f"... and results in {len(by_file) - 10} more files")
 
-        lines.append(f"Would you like me to show you the content of any of these files? Just ask!")
+        lines.append("Would you like me to show you the content of any of these files? Just ask!")
 
         return "\n".join(lines)
 
@@ -305,7 +304,7 @@ class ConversationalToolFormatter:
             try:
                 result = json.loads(result)
             except json.JSONDecodeError:
-                return f"I got a response but couldn't parse the issues properly."
+                return "I got a response but couldn't parse the issues properly."
 
         if not result.get("success", False):
             error = result.get("error", "Unknown error")
@@ -327,7 +326,7 @@ class ConversationalToolFormatter:
         for i, issue in enumerate(issues[:10], 1):  # Limit to 10
             title = issue.get("title", "Untitled")
             number = issue.get("number", "?")
-            state = issue.get("state", "unknown")
+            _state = issue.get("state", "unknown")
             labels = issue.get("labels", [])
 
             lines.append(f"{i}. **#{number}**: {title}")
@@ -358,7 +357,7 @@ class ConversationalToolFormatter:
         caps = result.get("capabilities", [])
 
         lines = [
-            f"I'm operational and ready to help! 🤖",
+            "I'm operational and ready to help! 🤖",
             "",
             f"**Worker ID:** `{worker_id}`",
             "",

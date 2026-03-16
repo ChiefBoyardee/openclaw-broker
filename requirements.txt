@@ -2,7 +2,7 @@
 # Broker: fastapi, uvicorn, pydantic
 # Runner: requests, openai (OpenAI-compatible LLM)
 # Bot: discord.py, requests
-# Tests: pytest
+# Tests: pytest, pytest-asyncio (asyncio_mode=auto configured in pyproject.toml)
 # Run pip-audit to check for known vulnerabilities.
 
 fastapi>=0.121,<0.136
@@ -13,5 +13,6 @@ requests>=2.31,<3
 openai>=1.40,<2
 discord.py>=2.3,<3
 aiohttp>=3.9,<4  # Required for agentic streaming mode
-pytest>=8.0,<9
+pytest>=8.0,<10
+pytest-asyncio>=0.23,<0.27
 ruff>=0.4,<0.15

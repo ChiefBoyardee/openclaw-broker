@@ -14,7 +14,6 @@ import json
 import os
 import base64
 from typing import Any, Optional, Dict, List
-from dataclasses import dataclass, asdict
 from urllib.parse import quote_plus
 
 # GitHub configuration
@@ -237,7 +236,7 @@ def github_list_issues(repo: str, state: str = "open", limit: int = 30) -> str:
                 "html_url": i.get("html_url"),
                 "created_at": i.get("created_at"),
                 "user": i.get("user", {}).get("login"),
-                "labels": [l.get("name") for l in i.get("labels", [])],
+                "labels": [lbl.get("name") for lbl in i.get("labels", [])],
             }
             for i in result[:limit]
             if "pull_request" not in i  # Skip PRs

@@ -480,7 +480,7 @@ def _handle_github_create_issue(
 ) -> str:
     labels = kwargs.get("labels")
     if labels and isinstance(labels, str):
-        labels = [l.strip() for l in labels.split(",")]
+        labels = [lbl.strip() for lbl in labels.split(",")]
     return bridge.github_create_issue(repo, title, kwargs.get("body", ""), labels)
 
 

@@ -14,10 +14,8 @@ from __future__ import annotations
 import sqlite3
 import json
 import time
-import hashlib
 from typing import List, Dict, Optional, Tuple, Any
-from dataclasses import dataclass, asdict
-from datetime import datetime
+from dataclasses import dataclass
 import logging
 
 logger = logging.getLogger(__name__)
@@ -781,7 +779,7 @@ class SelfMemory:
         lines = [
             "=== Urgo's Self-Memory ===",
             "",
-            f"📊 Stats:",
+            "📊 Stats:",
             f"  - Reflections: {ctx['stats']['total_reflections']}",
             f"  - Facts learned: {ctx['stats']['total_facts']}",
             f"  - Interests: {ctx['stats']['total_interests']}",
