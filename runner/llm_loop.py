@@ -633,119 +633,132 @@ def run_llm_tool_loop_streaming(
                 name = tc.get("name", "")
                 args_str = tc.get("arguments", "{}")
 
-                # Tool calls are logged but not streamed to Discord
                 logger.info(f"Tool call step {step}: {name}")
 
-            # Handle special discord_send_message tool
-            if name == "discord_send_message" and stream_client:
-                try:
-                    args = parse_tool_args(args_str)
-                    message = args.get("message", "")
-                    msg_type = args.get("type", "info")
-                    if message:
-                        stream_client.post_message(message, msg_type)
-                    tool_result = json.dumps({"sent": True, "message": message})
+                # Stream tool-call notification so the status message reflects what's happening
+                if stream_client:
+                    stream_client.post_tool_call(name, {})
+
+                # Handle special discord_send_message tool
+                if name == "discord_send_message" and stream_client:
+                    try:
+                        args = parse_tool_args(args_str)
+                        message = args.get("message", "")
+                        msg_type = args.get("type", "info")
+                        if message:
+                            stream_client.post_message(message, msg_type)
+                        tool_result = json.dumps({"sent": True, "message": message})
+                        if fallback_parsed:
+                            tool_results_text.append(f"[{name}]: {tool_result}")
+                        else:
+                            messages.append({
+                                "role": "tool",
+                                "tool_call_id": tc.get("id", ""),
+                                "content": tool_result,
+                            })
+                        tool_calls_audit.append({
+                            "name": name,
+                            "args": args,
+                            "status": "ok",
+                            "truncated_output": tool_result[:max_output_bytes],
+                        })
+                        if stream_client:
+                            stream_client.post_tool_result(name, tool_result, success=True)
+                        continue
+                    except Exception as e:
+                        logger.warning(f"Error handling discord_send_message: {e}")
+
+                # Reject oversized tool args
+                if len(args_str.encode("utf-8")) > max_tool_arg_bytes:
+                    err = "tool arguments too large"
+                    consecutive_refusals += 1
+                    tool_calls_audit.append({"name": name, "args": "<oversized>", "status": "error", "truncated_output": err})
                     if fallback_parsed:
-                        tool_results_text.append(f"[{name}]: {tool_result}")
+                        tool_results_text.append(f"[{name}]: Error: {err}")
                     else:
                         messages.append({
                             "role": "tool",
                             "tool_call_id": tc.get("id", ""),
-                            "content": tool_result,
+                            "content": f"Error: {err}",
                         })
-                    tool_calls_audit.append({
-                        "name": name,
-                        "args": args,
-                        "status": "ok",
-                        "truncated_output": tool_result[:max_output_bytes],
-                    })
+                    if stream_client:
+                        stream_client.post_tool_result(name, f"Error: {err}", success=False)
+                    if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
+                        final_text = "Job stopped: policy limits exceeded."
+                        safety["reason"] = "policy_refused"
+                        logger.warning("event=llm_task_policy_refused job_stopped=policy_limits")
+                        break
                     continue
+
+                try:
+                    args = parse_tool_args(args_str)
+                except ValueError as e:
+                    consecutive_refusals += 1
+                    tool_calls_audit.append({"name": name, "args": args_str, "status": "error", "truncated_output": str(e)})
+                    if fallback_parsed:
+                        tool_results_text.append(f"[{name}]: Error: {e}")
+                    else:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", ""),
+                            "content": f"Error: {e}",
+                        })
+                    if stream_client:
+                        stream_client.post_tool_result(name, f"Error: {e}", success=False)
+                    if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
+                        final_text = "Job stopped: policy limits exceeded."
+                        safety["reason"] = "policy_refused"
+                        break
+                    continue
+
+                # Execute tool
+                try:
+                    # CLI mode: route run(command="...") through CLI router
+                    if cli_mode and name == "run":
+                        command_str = args.get("command", "")
+                        result = cli_dispatch(command_str, repo_context, runner_bridge=runner_bridge)
+                    else:
+                        result = dispatch(name, args, repo_context, runner_bridge=runner_bridge)
                 except Exception as e:
-                    logger.warning(f"Error handling discord_send_message: {e}")
+                    consecutive_refusals += 1
+                    err_msg = str(e) or "unknown"
+                    tool_calls_audit.append({"name": name, "args": args, "status": "error", "truncated_output": err_msg})
+                    if fallback_parsed:
+                        tool_results_text.append(f"[{name}]: Error: {err_msg}")
+                    else:
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", ""),
+                            "content": f"Error: {err_msg}",
+                        })
+                    if stream_client:
+                        stream_client.post_tool_result(name, f"Error: {err_msg}", success=False)
+                    if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
+                        final_text = "Job stopped: policy limits exceeded."
+                        safety["reason"] = "policy_refused"
+                        break
+                    continue
 
-            # Reject oversized tool args
-            if len(args_str.encode("utf-8")) > max_tool_arg_bytes:
-                err = "tool arguments too large"
-                consecutive_refusals += 1
-                tool_calls_audit.append({"name": name, "args": "<oversized>", "status": "error", "truncated_output": err})
-                if fallback_parsed:
-                    tool_results_text.append(f"[{name}]: Error: {err}")
-                else:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
-                        "content": f"Error: {err}",
-                    })
-                if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
-                    final_text = "Job stopped: policy limits exceeded."
-                    safety["reason"] = "policy_refused"
-                    logger.warning("event=llm_task_policy_refused job_stopped=policy_limits")
-                    break
-                continue
-
-            try:
-                args = parse_tool_args(args_str)
-            except ValueError as e:
-                consecutive_refusals += 1
-                tool_calls_audit.append({"name": name, "args": args_str, "status": "error", "truncated_output": str(e)})
-                if fallback_parsed:
-                    tool_results_text.append(f"[{name}]: Error: {e}")
-                else:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
-                        "content": f"Error: {e}",
-                    })
-                if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
-                    final_text = "Job stopped: policy limits exceeded."
-                    safety["reason"] = "policy_refused"
-                    break
-                continue
-
-            # Execute tool
-            try:
-                # CLI mode: route run(command="...") through CLI router
-                if cli_mode and name == "run":
-                    command_str = args.get("command", "")
-                    result = cli_dispatch(command_str, repo_context, runner_bridge=runner_bridge)
-                else:
-                    result = dispatch(name, args, repo_context, runner_bridge=runner_bridge)
-            except Exception as e:
-                consecutive_refusals += 1
-                err_msg = str(e) or "unknown"
-                tool_calls_audit.append({"name": name, "args": args, "status": "error", "truncated_output": err_msg})
-                if fallback_parsed:
-                    tool_results_text.append(f"[{name}]: Error: {err_msg}")
-                else:
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
-                        "content": f"Error: {err_msg}",
-                    })
-                if consecutive_refusals >= POLICY_REFUSAL_THRESHOLD:
-                    final_text = "Job stopped: policy limits exceeded."
-                    safety["reason"] = "policy_refused"
-                    break
-                continue
-
-            consecutive_refusals = 0
-            truncated_result, was_truncated = _truncate_for_audit(result, max_output_bytes)
-            if was_truncated:
-                safety["truncations"] = safety.get("truncations", 0) + 1
-            tool_calls_audit.append({
-                "name": name,
-                "args": args,
-                "status": "ok",
-                "truncated_output": truncated_result,
-            })
-            if fallback_parsed:
-                tool_results_text.append(f"[{name}]: {truncated_result}")
-            else:
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": truncated_result,
+                consecutive_refusals = 0
+                truncated_result, was_truncated = _truncate_for_audit(result, max_output_bytes)
+                if was_truncated:
+                    safety["truncations"] = safety.get("truncations", 0) + 1
+                tool_calls_audit.append({
+                    "name": name,
+                    "args": args,
+                    "status": "ok",
+                    "truncated_output": truncated_result,
                 })
+                if stream_client:
+                    stream_client.post_tool_result(name, truncated_result, success=True)
+                if fallback_parsed:
+                    tool_results_text.append(f"[{name}]: {truncated_result}")
+                else:
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", ""),
+                        "content": truncated_result,
+                    })
 
             # When fallback parser was used, inject results as plain-text user message
             if fallback_parsed and tool_results_text:

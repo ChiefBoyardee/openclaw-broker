@@ -64,7 +64,7 @@ from broker.streaming import (
 DB_PATH = os.environ.get("BROKER_DB", "/var/lib/openclaw-broker/broker.db")
 WORKER_TOKEN = os.environ.get("WORKER_TOKEN", "")
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-LEASE_SECONDS = int(os.environ.get("LEASE_SECONDS", "60"))
+LEASE_SECONDS = int(os.environ.get("LEASE_SECONDS", "300"))
 _raw_max_queued = os.environ.get("MAX_QUEUED_JOBS", "").strip()
 MAX_QUEUED_JOBS: Optional[int] = int(_raw_max_queued) if _raw_max_queued else None
 
@@ -566,6 +566,9 @@ def fail_job(job_id: str, body: JobFail):
 def add_job_chunk(job_id: str, body: ChunkCreate):
     """
     Add a chunk to a job stream. Used by runners to stream intermediate results.
+
+    Heartbeat chunks also extend the job lease by LEASE_SECONDS from now, preventing
+    active long-running jobs from being requeued while the runner is still working.
     """
     if not ENABLE_STREAMING or not stream_manager:
         raise HTTPException(503, "streaming not enabled")
@@ -594,9 +597,16 @@ def add_job_chunk(job_id: str, body: ChunkCreate):
         logger.warning(f"Chunk post for job {job_id}: not found after 3 attempts. Similar jobs: {[dict(r) for r in all_jobs]}")
         raise HTTPException(404, "job not found")
 
-    if row["status"] not in ("running", "queued"):
-        # Still allow chunks for done/failed jobs briefly (final messages)
-        pass
+    # Extend lease when a heartbeat arrives so active long-running jobs are not
+    # requeued by the stale-job cleanup in /jobs/next.
+    if body.chunk_type == ChunkType.HEARTBEAT and row["status"] == "running":
+        new_lease = int(time.time()) + LEASE_SECONDS
+        with db_conn() as conn:
+            conn.execute(
+                "UPDATE jobs SET lease_until = ? WHERE id = ? AND status = 'running'",
+                (new_lease, job_id),
+            )
+        logger.debug(f"Lease extended for job {job_id} until {new_lease} (+{LEASE_SECONDS}s)")
 
     chunk_id = stream_manager.add_chunk(
         job_id=job_id,

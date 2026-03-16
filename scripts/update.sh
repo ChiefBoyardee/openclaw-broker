@@ -4,6 +4,79 @@
 
 set -e
 
+# ---------------------------------------------------------------------------
+# Env-file migration helpers
+# ---------------------------------------------------------------------------
+
+# Replace an exact "KEY=OLD_VAL" line with "KEY=NEW_VAL".
+# Only acts when the line is present with exactly that value; leaves user
+# customisations with any other value untouched.
+_replace_env_val() {
+    local file="$1" key="$2" old_val="$3" new_val="$4"
+    if grep -qE "^${key}=${old_val}$" "$file" 2>/dev/null; then
+        run_sudo sed -i "s|^${key}=${old_val}$|${key}=${new_val}|" "$file"
+        echo "    Migrated: ${key}=${old_val} → ${key}=${new_val}"
+    fi
+}
+
+# Comment out a KEY=* line (any value) — used for vars that are fully removed.
+# Skips lines that are already commented out.
+_comment_out_env_key() {
+    local file="$1" key="$2" reason="$3"
+    if grep -qE "^${key}=" "$file" 2>/dev/null; then
+        run_sudo sed -i "s|^${key}=|# [removed] ${key}=|" "$file"
+        echo "    Commented out: ${key}  (${reason})"
+    fi
+}
+
+# Migrate a single env file.  Backs up the file first if any changes are needed.
+_migrate_env_file() {
+    local file="$1" label="$2"
+    [[ -f "$file" ]] || return 0
+
+    # Check whether this file needs any migration at all before touching it.
+    local needs_migration=0
+    grep -qE "^LEASE_SECONDS=60$"            "$file" 2>/dev/null && needs_migration=1
+    grep -qE "^VPS_CMD_TIMEOUT=60$"          "$file" 2>/dev/null && needs_migration=1
+    grep -qE "^AGENTIC_ABSOLUTE_MAX_TIMEOUT=" "$file" 2>/dev/null && needs_migration=1
+    grep -qE "^AGENTIC_MAX_STREAM_WAIT="      "$file" 2>/dev/null && needs_migration=1
+    grep -qE "^AGENTIC_IDLE_TIMEOUT="         "$file" 2>/dev/null && needs_migration=1
+
+    [[ $needs_migration -eq 0 ]] && return 0
+
+    echo "  -> Migrating $label ($file)..."
+    run_sudo cp "$file" "${file}.backup.$(date +%Y%m%d%H%M%S)"
+
+    # Broker: old hard lease default → new default matching heartbeat-renewal logic
+    _replace_env_val "$file" "LEASE_SECONDS"   "60"  "300"
+
+    # Runner: old SSH command timeout → longer default for certbot/nginx operations
+    _replace_env_val "$file" "VPS_CMD_TIMEOUT" "60"  "120"
+
+    # Bot: AGENTIC_ABSOLUTE_MAX_TIMEOUT is fully removed — it bypassed idle-based
+    # termination and was the primary cause of hard cutoffs on long tasks.
+    _comment_out_env_key "$file" "AGENTIC_ABSOLUTE_MAX_TIMEOUT" \
+        "replaced by idle-based termination; heartbeats keep job alive indefinitely"
+
+    # Bot: AGENTIC_MAX_STREAM_WAIT — if set to ≤900 (old default), bump to 3600.
+    # Values the user explicitly raised above 900 are left untouched.
+    local msw
+    msw=$(grep -E "^AGENTIC_MAX_STREAM_WAIT=" "$file" 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')
+    if [[ -n "$msw" ]] && [[ "$msw" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+        if (( $(echo "$msw <= 900" | bc -l) )); then
+            _replace_env_val "$file" "AGENTIC_MAX_STREAM_WAIT" "$msw" "3600"
+        fi
+    fi
+
+    # Bot: AGENTIC_IDLE_TIMEOUT — the variable is still valid (controls how long
+    # to wait without any heartbeat before declaring runner dead), but values that
+    # were lowered to work around the old absolute-timeout bug can be relaxed.
+    # We only migrate the old conservative default of 300; anything else is left.
+    _replace_env_val "$file" "AGENTIC_IDLE_TIMEOUT" "300" "600"
+
+    echo "    Done.  Original saved as ${file}.backup.*"
+}
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
@@ -32,7 +105,13 @@ echo "=== Updating OpenClaw Broker ==="
 if [[ -d "${REPO_ROOT}/.venv-broker" ]]; then
     echo "Detected broker installation. Updating dependencies..."
     "${REPO_ROOT}/.venv-broker/bin/pip" install -r requirements.txt
-    
+
+    # Migrate broker.env: LEASE_SECONDS 60→300 (heartbeat lease renewal now keeps
+    # long jobs alive, so the base lease just needs to outlive one heartbeat interval)
+    for BROKER_ENV in /opt/openclaw-broker/broker.env "${REPO_ROOT}/broker.env" "${REPO_ROOT}/broker/broker.env"; do
+        _migrate_env_file "$BROKER_ENV" "broker.env"
+    done
+
     if systemctl list-units --full -all | grep -Fq "openclaw-broker.service"; then
         echo "Restarting openclaw-broker service..."
         run_sudo systemctl restart openclaw-broker
@@ -66,6 +145,11 @@ if [[ -d "${REPO_ROOT}/.venv-runner" ]]; then
         echo "Note: Runner embedding model configured. Ensure sentence-transformers is installed (included in enhanced deps)."
     fi
     
+    # Migrate runner.env: VPS_CMD_TIMEOUT 60→120 s for long SSH operations
+    for RUNNER_ENV in "${REPO_ROOT}/runner/runner.env" "${REPO_ROOT}/runner.env" /opt/openclaw-runner-jetson/runner.env; do
+        _migrate_env_file "$RUNNER_ENV" "runner.env"
+    done
+
     # Restart runner service if using systemd
     if systemctl list-units --full -all | grep -Fq "openclaw-runner.service"; then
         echo "Restarting openclaw-runner service to re-initialize LLM state..."
@@ -114,29 +198,8 @@ for BOT_DIR in /opt/openclaw-bot-*; do
         
         run_sudo chown -R openclaw:openclaw "$BOT_DIR/discord_bot" "$BOT_DIR/requirements.txt"
         
-        # Clean up old timeout environment variables (replaced by intelligent termination)
-        if [[ -f "$BOT_DIR/bot.env" ]]; then
-            # Remove or comment out old hard timeout variables that conflict with new intelligent termination
-            if grep -qE "^AGENTIC_MAX_STREAM_WAIT=|^AGENTIC_IDLE_TIMEOUT=|^AGENTIC_ABSOLUTE_MAX_TIMEOUT=" "$BOT_DIR/bot.env"; then
-                echo "  -> Migrating bot.env: Removing old hard timeout variables (now uses intelligent termination)..."
-                # Create backup
-                run_sudo cp "$BOT_DIR/bot.env" "$BOT_DIR/bot.env.backup.$(date +%Y%m%d%H%M%S)"
-                # Comment out old timeout lines and add explanatory comment
-                run_sudo sed -i 's/^AGENTIC_MAX_STREAM_WAIT=/# Removed: AGENTIC_MAX_STREAM_WAIT (replaced by intelligent termination)
-# AGENTIC_MAX_STREAM_WAIT=/g' "$BOT_DIR/bot.env"
-                run_sudo sed -i 's/^AGENTIC_IDLE_TIMEOUT=/# Removed: AGENTIC_IDLE_TIMEOUT (replaced by intelligent termination)
-# AGENTIC_IDLE_TIMEOUT=/g' "$BOT_DIR/bot.env"
-                run_sudo sed -i 's/^AGENTIC_ABSOLUTE_MAX_TIMEOUT=/# Removed: AGENTIC_ABSOLUTE_MAX_TIMEOUT (replaced by intelligent termination)
-# AGENTIC_ABSOLUTE_MAX_TIMEOUT=/g' "$BOT_DIR/bot.env"
-                # Add comment about new behavior if not already present
-                if ! grep -q "Intelligent termination" "$BOT_DIR/bot.env"; then
-                    run_sudo bash -c "echo '' >> '$BOT_DIR/bot.env'"
-                    run_sudo bash -c "echo '# Intelligent termination: Hard timeouts removed as of March 2025' >> '$BOT_DIR/bot.env'"
-                    run_sudo bash -c "echo '# Sessions now use idle detection (10min without chunks) and stuck-loop detection' >> '$BOT_DIR/bot.env'"
-                    run_sudo bash -c "echo '# This allows long-running tasks while still detecting crashed runners' >> '$BOT_DIR/bot.env'"
-                fi
-            fi
-        fi
+        # Migrate bot.env: remove/update legacy hard-timeout variables
+        _migrate_env_file "$BOT_DIR/bot.env" "bot.env ($INSTANCE_NAME)"
         
         echo "  -> Updating bot dependencies..."
         if [[ $EUID -eq 0 ]]; then
